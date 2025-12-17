@@ -4,12 +4,15 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'Frontend01/**'                             # only run when Frontend01 changes
+      - '.github/workflows/deploy-frontend.yml'     # or when this workflow itself changes
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1               # change if your region is different
-  ECS_CLUSTER: your-ecs-cluster-name  # TODO: update
-  FRONTEND_SERVICE: your-frontend-service-name  # TODO: update
+  AWS_REGION: us-east-1                 # change if your region is different
+  ECS_CLUSTER: your-ecs-cluster-name    # TODO: update to your ECS cluster
+  FRONTEND_SERVICE: your-frontend-service-name  # TODO: update to your ECS service
 
 jobs:
   build-and-deploy-frontend:
