@@ -1,0 +1,60 @@
+name: Frontend CI Deployment to AWS
+
+on:
+  push:
+    branches:
+      - main
+      - Fargate-FE
+
+env:
+  AWS_REGION: us-east-1
+  ECS_CLUSTER: brentaneal-cluster
+  FRONTEND_SERVICE: brentaneal-frontend-service
+
+jobs:
+  build-and-deploy-frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'
+          cache: 'npm'
+          cache-dependency-path: Frontend01/package-lock.json
+
+      - name: Build Frontend (in Frontend01)
+        working-directory: Frontend01
+        run: |
+          echo "Installing dependencies and building frontend in Frontend01..."
+          npm install
+          npm run build
+
+      # THIS STEP MUST COME BEFORE THE DEPLOY STEP
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || env.AWS_REGION }}
+
+      - name: Deploy Frontend — force new ECS deployment
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION || env.AWS_REGION }}
+          ECS_CLUSTER: ${{ env.ECS_CLUSTER }}
+          FRONTEND_SERVICE: ${{ env.FRONTEND_SERVICE }}
+        run: |
+          if [ -z "$AWS_REGION" ]; then
+            echo "ERROR: AWS_REGION is not set." >&2
+            exit 1
+          fi
+
+          echo "Forcing new deployment for $FRONTEND_SERVICE in cluster $ECS_CLUSTER (region $AWS_REGION)..."
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$FRONTEND_SERVICE" \
+            --force-new-deployment \
+            --region "$AWS_REGION"
