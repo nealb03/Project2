@@ -1,4 +1,3 @@
-// Frontend01/src/App.jsx
 import React from 'react'
 import './index.css'
 
