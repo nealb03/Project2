@@ -1,0 +1,42 @@
+name: Start ECS Frontend & Backend
+
+on:
+  workflow_dispatch:   # Manual trigger from the Actions tab
+
+jobs:
+  start-services:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Install AWS CLI
+        run: |
+          pip install awscli
+
+      - name: Start Frontend service
+        run: |
+          aws ecs update-service \
+            --region us-east-1 \
+            --cluster brentaneal-cluster \
+            --service brentaneal-frontend-service \
+            --desired-count 1
+
+      - name: Start Backend service
+        run: |
+          aws ecs update-service \
+            --region us-east-1 \
+            --cluster brentaneal-cluster \
+            --service brentaneal-backend-service \
+            --desired-count 1
