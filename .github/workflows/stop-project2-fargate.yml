@@ -18,6 +18,44 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      - name: Check for Auto-Scaling on Frontend
+        run: |
+          echo "Checking for Application Auto Scaling on Frontend..."
+          aws application-autoscaling describe-scalable-targets \
+            --service-namespace ecs \
+            --resource-ids service/brentaneal-cluster/brentaneal-frontend-service \
+            --region us-east-1 || echo "No auto-scaling configured for Frontend"
+
+      - name: Check for Auto-Scaling on Backend
+        run: |
+          echo "Checking for Application Auto Scaling on Backend..."
+          aws application-autoscaling describe-scalable-targets \
+            --service-namespace ecs \
+            --resource-ids service/brentaneal-cluster/brentaneal-backend-service \
+            --region us-east-1 || echo "No auto-scaling configured for Backend"
+
+      - name: Deregister Frontend Auto-Scaling
+        continue-on-error: true
+        run: |
+          echo "Deregistering Frontend from Application Auto Scaling..."
+          aws application-autoscaling deregister-scalable-target \
+            --service-namespace ecs \
+            --resource-id service/brentaneal-cluster/brentaneal-frontend-service \
+            --scalable-dimension ecs:service:DesiredCount \
+            --region us-east-1
+          echo "Frontend auto-scaling deregistered"
+
+      - name: Deregister Backend Auto-Scaling
+        continue-on-error: true
+        run: |
+          echo "Deregistering Backend from Application Auto Scaling..."
+          aws application-autoscaling deregister-scalable-target \
+            --service-namespace ecs \
+            --resource-id service/brentaneal-cluster/brentaneal-backend-service \
+            --scalable-dimension ecs:service:DesiredCount \
+            --region us-east-1
+          echo "Backend auto-scaling deregistered"
+
       - name: Stop Frontend ECS Service
         run: |
           echo "Stopping Frontend ECS service..."
@@ -25,8 +63,9 @@ jobs:
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --service brentaneal-frontend-service \
-            --desired-count 0
-          echo "Frontend service stop command sent"
+            --desired-count 0 \
+            --force-new-deployment
+          echo "Frontend service stop command sent (desired-count set to 0)"
 
       - name: Stop Backend ECS Service
         run: |
@@ -35,46 +74,124 @@ jobs:
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --service brentaneal-backend-service \
-            --desired-count 0
-          echo "Backend service stop command sent"
+            --desired-count 0 \
+            --force-new-deployment
+          echo "Backend service stop command sent (desired-count set to 0)"
 
-      - name: Wait for Frontend to scale down
+      - name: Wait for services to drain (60 seconds)
         run: |
-          echo "Waiting for Frontend tasks to terminate..."
-          sleep 30
-          FRONTEND_COUNT=$(aws ecs describe-services \
+          echo "Waiting 60 seconds for tasks to terminate..."
+          sleep 60
+
+      - name: Verify Frontend stopped
+        run: |
+          echo "Checking Frontend service status..."
+          FRONTEND_RUNNING=$(aws ecs describe-services \
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --services brentaneal-frontend-service \
             --query 'services[0].runningCount' \
             --output text)
-          echo "Frontend running tasks: $FRONTEND_COUNT"
+          
+          FRONTEND_DESIRED=$(aws ecs describe-services \
+            --region us-east-1 \
+            --cluster brentaneal-cluster \
+            --services brentaneal-frontend-service \
+            --query 'services[0].desiredCount' \
+            --output text)
+          
+          echo "Frontend - Running: $FRONTEND_RUNNING, Desired: $FRONTEND_DESIRED"
+          
+          if [ "$FRONTEND_DESIRED" != "0" ]; then
+            echo "WARNING: Frontend desired count is not 0! Auto-scaling may be active."
+          fi
 
-      - name: Wait for Backend to scale down
+      - name: Verify Backend stopped
         run: |
-          echo "Waiting for Backend tasks to terminate..."
-          sleep 30
-          BACKEND_COUNT=$(aws ecs describe-services \
+          echo "Checking Backend service status..."
+          BACKEND_RUNNING=$(aws ecs describe-services \
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --services brentaneal-backend-service \
             --query 'services[0].runningCount' \
             --output text)
-          echo "Backend running tasks: $BACKEND_COUNT"
+          
+          BACKEND_DESIRED=$(aws ecs describe-services \
+            --region us-east-1 \
+            --cluster brentaneal-cluster \
+            --services brentaneal-backend-service \
+            --query 'services[0].desiredCount' \
+            --output text)
+          
+          echo "Backend - Running: $BACKEND_RUNNING, Desired: $BACKEND_DESIRED"
+          
+          if [ "$BACKEND_DESIRED" != "0" ]; then
+            echo "WARNING: Backend desired count is not 0! Auto-scaling may be active."
+          fi
 
-      - name: Display service status
+      - name: Force stop remaining Frontend tasks
+        continue-on-error: true
+        run: |
+          echo "Checking for remaining Frontend tasks..."
+          TASK_ARNS=$(aws ecs list-tasks \
+            --region us-east-1 \
+            --cluster brentaneal-cluster \
+            --service-name brentaneal-frontend-service \
+            --query 'taskArns[*]' \
+            --output text)
+          
+          if [ ! -z "$TASK_ARNS" ]; then
+            echo "Force stopping Frontend tasks: $TASK_ARNS"
+            for TASK_ARN in $TASK_ARNS; do
+              aws ecs stop-task \
+                --region us-east-1 \
+                --cluster brentaneal-cluster \
+                --task $TASK_ARN \
+                --reason "Stopped by GitHub Actions workflow"
+            done
+          else
+            echo "No Frontend tasks to stop"
+          fi
+
+      - name: Force stop remaining Backend tasks
+        continue-on-error: true
+        run: |
+          echo "Checking for remaining Backend tasks..."
+          TASK_ARNS=$(aws ecs list-tasks \
+            --region us-east-1 \
+            --cluster brentaneal-cluster \
+            --service-name brentaneal-backend-service \
+            --query 'taskArns[*]' \
+            --output text)
+          
+          if [ ! -z "$TASK_ARNS" ]; then
+            echo "Force stopping Backend tasks: $TASK_ARNS"
+            for TASK_ARN in $TASK_ARNS; do
+              aws ecs stop-task \
+                --region us-east-1 \
+                --cluster brentaneal-cluster \
+                --task $TASK_ARN \
+                --reason "Stopped by GitHub Actions workflow"
+            done
+          else
+            echo "No Backend tasks to stop"
+          fi
+
+      - name: Final status check
         run: |
           echo "=========================================="
-          echo "Project2 Fargate Services Stopped"
+          echo "Final Service Status"
           echo "=========================================="
           
           aws ecs describe-services \
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --services brentaneal-frontend-service brentaneal-backend-service \
-            --query 'services[*].[serviceName,runningCount,desiredCount]' \
+            --query 'services[*].[serviceName,runningCount,desiredCount,status]' \
             --output table
           
           echo ""
-          echo "Services have been scaled to 0"
-          echo "No charges for stopped Fargate tasks"
+          echo "If desired count is not 0, check for:"
+          echo "1. Application Auto Scaling policies"
+          echo "2. AWS Console ECS Service auto-scaling settings"
+          echo "3. CloudFormation/Terraform managing the service"
