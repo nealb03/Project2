@@ -4,7 +4,7 @@ on:
   workflow_dispatch:   # Manual trigger from the Actions tab
 
 jobs:
-  start-services:
+  start-Project2 (Fargate):
     runs-on: ubuntu-latest
 
     permissions:
