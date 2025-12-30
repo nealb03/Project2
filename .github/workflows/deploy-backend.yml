@@ -4,10 +4,10 @@ on:
   push:
     branches:
       - main
-      - Fargate-BE     # add any other branches you want to deploy from
+      - Fargate-BE
     paths:
-      - 'Backend01/**'                               # only run when Backend01 changes
-      - '.github/workflows/deploy-backend.yml'       # or when this workflow itself changes
+      - 'Project2-Fargate/Backend/**'                    # Updated path
+      - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
 jobs:
@@ -27,9 +27,9 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Build backend
-        working-directory: Backend01
+        working-directory: Project2-Fargate/Backend      # Updated path
         run: |
-          echo "Building backend..."
+          echo "Building Project2 Fargate backend..."
           # Example build commands (uncomment/adjust for your stack):
           # npm install
           # npm run build
@@ -37,9 +37,9 @@ jobs:
           # dotnet build
 
       - name: Deploy backend
-        working-directory: Backend01
+        working-directory: Project2-Fargate/Backend      # Updated path
         run: |
-          echo "Deploying backend..."
+          echo "Deploying Project2 Fargate backend..."
           # Example deployment commands (adjust to your environment):
           # For ECS:
           # aws ecs update-service \

@@ -1,0 +1,65 @@
+name: Start Project1 (S3+EC2+RDS)
+
+on:
+  workflow_dispatch:  # Manual trigger from GitHub Actions tab
+
+jobs:
+  start-project1:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Start EC2 instance
+        run: |
+          echo "Starting EC2 instance..."
+          aws ec2 start-instances --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
+          echo "EC2 instance start command sent"
+      
+      - name: Wait for EC2 instance to be running
+        run: |
+          echo "Waiting for instance to be running..."
+          aws ec2 wait instance-running --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
+          echo "EC2 instance is now running"
+      
+      - name: Wait for Windows to boot (additional 60 seconds)
+        run: |
+          echo "Waiting for Windows Server to fully boot..."
+          sleep 60
+      
+      - name: Start Backend Application via SSM
+        run: |
+          echo "Starting ASP.NET Core backend..."
+          aws ssm send-command \
+            --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }} \
+            --document-name "AWS-RunPowerShellScript" \
+            --parameters 'commands=["cd C:\\Backend01\\MyWebApi", "Start-Process powershell -ArgumentList \"-Command\", \"dotnet run --urls http://0.0.0.0:5001\" -WindowStyle Hidden"]' \
+            --comment "Start Project1 Backend"
+          echo "Backend start command sent via SSM"
+      
+      - name: Get EC2 Public IP
+        id: get-ip
+        run: |
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }} \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+          echo "Public IP: $PUBLIC_IP"
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+      
+      - name: Summary
+        run: |
+          echo "✅ Project1 Started Successfully!"
+          echo ""
+          echo "📍 Backend API: http://${{ steps.get-ip.outputs.public_ip }}:5001"
+          echo "📍 Frontend: http://nealb03-frontend-bucket-unique-2887.s3-website-us-east-1.amazonaws.com/"
+          echo ""
+          echo "⏰ Started at: $(date)"

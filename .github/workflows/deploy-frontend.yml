@@ -5,14 +5,14 @@ on:
     branches:
       - main
     paths:
-      - 'Frontend01/**'                             # only run when Frontend01 changes
-      - '.github/workflows/deploy-frontend.yml'     # or when this workflow itself changes
+      - 'Project2-Fargate/Frontend/**'              # Updated path
+      - '.github/workflows/deploy-frontend.yml'
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1                 # change if your region is different
-  ECS_CLUSTER: your-ecs-cluster-name    # TODO: update to your ECS cluster
-  FRONTEND_SERVICE: your-frontend-service-name  # TODO: update to your ECS service
+  AWS_REGION: us-east-1
+  ECS_CLUSTER: your-ecs-cluster-name
+  FRONTEND_SERVICE: your-frontend-service-name
 
 jobs:
   build-and-deploy-frontend:
@@ -25,14 +25,14 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'   # or whatever version your FE uses
+          node-version: '20'
 
       - name: Install dependencies
-        working-directory: Frontend01
+        working-directory: Project2-Fargate/Frontend    # Updated path
         run: npm install
 
       - name: Build frontend
-        working-directory: Frontend01
+        working-directory: Project2-Fargate/Frontend    # Updated path
         run: npm run build
 
       - name: Configure AWS credentials
@@ -53,7 +53,7 @@ jobs:
       #     ECR_REPOSITORY: your-frontend-ecr-repo
       #     IMAGE_TAG: ${{ github.sha }}
       #   run: |
-      #     docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG Frontend01
+      #     docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG Project2-Fargate/Frontend
       #     docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
       #
       # - name: Deploy to ECS
