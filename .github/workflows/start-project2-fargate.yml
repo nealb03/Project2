@@ -21,50 +21,46 @@ jobs:
 
       - name: Start Frontend ECS Service
         run: |
-          echo "🚀 Starting Frontend ECS service..."
+          echo "Starting Frontend ECS service..."
           aws ecs update-service \
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --service brentaneal-frontend-service \
             --desired-count 1
-          echo "✅ Frontend service start command sent"
+          echo "Frontend service start command sent"
 
       - name: Start Backend ECS Service
         run: |
-          echo "🚀 Starting Backend ECS service..."
+          echo "Starting Backend ECS service..."
           aws ecs update-service \
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --service brentaneal-backend-service \
             --desired-count 1
-          echo "✅ Backend service start command sent"
+          echo "Backend service start command sent"
 
-      - name: Wait for Frontend to stabilize
+      - name: Wait for services to stabilize
         run: |
-          echo "⏳ Waiting for Frontend service to stabilize..."
+          echo "Waiting for Frontend service to stabilize..."
           aws ecs wait services-stable \
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --services brentaneal-frontend-service
-          echo "✅ Frontend is stable and running!"
-
-      - name: Wait for Backend to stabilize
-        run: |
-          echo "⏳ Waiting for Backend service to stabilize..."
+          
+          echo "Waiting for Backend service to stabilize..."
           aws ecs wait services-stable \
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --services brentaneal-backend-service
-          echo "✅ Backend is stable and running!"
+          
+          echo "Both services are now stable and running!"
 
-      - name: Get Service Information
+      - name: Display service information
         run: |
           echo "=========================================="
-          echo "✅ Project2 Fargate Services Started!"
+          echo "Project2 Fargate Services Started!"
           echo "=========================================="
-          echo ""
           
-          # Get Frontend task count
           FRONTEND_TASKS=$(aws ecs describe-services \
             --region us-east-1 \
             --cluster brentaneal-cluster \
@@ -72,7 +68,6 @@ jobs:
             --query 'services[0].runningCount' \
             --output text)
           
-          # Get Backend task count
           BACKEND_TASKS=$(aws ecs describe-services \
             --region us-east-1 \
             --cluster brentaneal-cluster \
@@ -80,10 +75,7 @@ jobs:
             --query 'services[0].runningCount' \
             --output text)
           
-          echo "📊 Frontend Running Tasks: $FRONTEND_TASKS"
-          echo "📊 Backend Running Tasks: $BACKEND_TASKS"
+          echo "Frontend Running Tasks: $FRONTEND_TASKS"
+          echo "Backend Running Tasks: $BACKEND_TASKS"
           echo ""
-          echo "📍 AWS Console:"
-          echo "   https://console.aws.amazon.com/ecs/home?region=us-east-1#/clusters/brentaneal-cluster/services"
-          echo ""
-          echo "⏰ Started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "AWS Console: https://console.aws.amazon.com/ecs/home?region=us-east-1#/clusters/brentaneal-cluster/services"
