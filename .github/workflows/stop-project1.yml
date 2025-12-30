@@ -1,0 +1,56 @@
+name: Stop Project1 (S3+EC2+RDS)
+
+on:
+  workflow_dispatch:  # Manual trigger from GitHub Actions tab
+
+jobs:
+  stop-project1:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Stop Backend Application via SSM
+        run: |
+          echo "Stopping ASP.NET Core backend..."
+          aws ssm send-command \
+            --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }} \
+            --document-name "AWS-RunPowerShellScript" \
+            --parameters 'commands=["Stop-Process -Name dotnet -Force -ErrorAction SilentlyContinue", "Write-Output \"Backend stopped\""]' \
+            --comment "Stop Project1 Backend"
+          echo "Backend stop command sent via SSM"
+      
+      - name: Wait for backend to stop
+        run: |
+          echo "Waiting 10 seconds for backend to stop gracefully..."
+          sleep 10
+      
+      - name: Stop EC2 instance
+        run: |
+          echo "Stopping EC2 instance..."
+          aws ec2 stop-instances --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
+          echo "EC2 instance stop command sent"
+      
+      - name: Wait for EC2 instance to be stopped
+        run: |
+          echo "Waiting for instance to be stopped..."
+          aws ec2 wait instance-stopped --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
+          echo "EC2 instance is now stopped"
+      
+      - name: Summary
+        run: |
+          echo "✅ Project1 Stopped Successfully!"
+          echo ""
+          echo "💤 EC2 Instance: Stopped"
+          echo "💤 Backend API: Stopped"
+          echo "✅ Frontend (S3): Still available"
+          echo ""
+          echo "⏰ Stopped at: $(date)"
