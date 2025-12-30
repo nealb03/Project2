@@ -5,7 +5,6 @@ on:
 
 jobs:
   start-fargate-services:
-    name: Start ECS Fargate Services
     runs-on: ubuntu-latest
 
     steps:
@@ -27,7 +26,7 @@ jobs:
             --cluster brentaneal-cluster \
             --service brentaneal-frontend-service \
             --desired-count 1
-          echo "Frontend service start command sent"
+          echo "Frontend service started"
 
       - name: Start Backend ECS Service
         run: |
@@ -37,45 +36,33 @@ jobs:
             --cluster brentaneal-cluster \
             --service brentaneal-backend-service \
             --desired-count 1
-          echo "Backend service start command sent"
+          echo "Backend service started"
 
       - name: Wait for services to stabilize
         run: |
-          echo "Waiting for Frontend service to stabilize..."
+          echo "Waiting for Frontend to stabilize..."
           aws ecs wait services-stable \
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --services brentaneal-frontend-service
           
-          echo "Waiting for Backend service to stabilize..."
+          echo "Waiting for Backend to stabilize..."
           aws ecs wait services-stable \
             --region us-east-1 \
             --cluster brentaneal-cluster \
             --services brentaneal-backend-service
           
-          echo "Both services are now stable and running!"
+          echo "All services are running!"
 
-      - name: Display service information
+      - name: Display service status
         run: |
           echo "=========================================="
-          echo "Project2 Fargate Services Started!"
+          echo "Project2 Fargate Services Started"
           echo "=========================================="
           
-          FRONTEND_TASKS=$(aws ecs describe-services \
+          aws ecs describe-services \
             --region us-east-1 \
             --cluster brentaneal-cluster \
-            --services brentaneal-frontend-service \
-            --query 'services[0].runningCount' \
-            --output text)
-          
-          BACKEND_TASKS=$(aws ecs describe-services \
-            --region us-east-1 \
-            --cluster brentaneal-cluster \
-            --services brentaneal-backend-service \
-            --query 'services[0].runningCount' \
-            --output text)
-          
-          echo "Frontend Running Tasks: $FRONTEND_TASKS"
-          echo "Backend Running Tasks: $BACKEND_TASKS"
-          echo ""
-          echo "AWS Console: https://console.aws.amazon.com/ecs/home?region=us-east-1#/clusters/brentaneal-cluster/services"
+            --services brentaneal-frontend-service brentaneal-backend-service \
+            --query 'services[*].[serviceName,runningCount,desiredCount]' \
+            --output table
