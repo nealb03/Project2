@@ -1,7 +1,15 @@
 name: Terraform Deploy - SANDBOX
 
 on:
-  # Manual trigger: used for real Terraform changes in SANDBOX
+  # Auto-run planning on Terraform changes
+  push:
+    branches:
+      - main
+      - terraform-modules
+    paths:
+      - 'terraform/**'
+
+  # Manual trigger for ad‑hoc runs / different apps/regions
   workflow_dispatch:
     inputs:
       app:
@@ -13,16 +21,18 @@ on:
         required: true
         default: 'us-east-1'
       confirm_apply:
-        description: 'Type "APPLY" to confirm you understand this will change real infrastructure in SANDBOX'
+        description: 'Type "APPLY" to confirm you want to run terraform apply in SANDBOX'
         required: true
         default: 'NO'
 
 jobs:
   terraform-deploy-sandbox:
-    name: Terraform Deploy SANDBOX for ${{ github.event.inputs.app }}
+    # Show app name if workflow_dispatch; otherwise just SANDBOX
+    name: >-
+      Terraform Deploy SANDBOX
+      ${{ github.event_name == 'workflow_dispatch' && format('for {0}', github.event.inputs.app) || '' }}
     runs-on: ubuntu-latest
 
-    # GitHub Environment "sandbox"
     environment: sandbox
 
     permissions:
@@ -30,10 +40,28 @@ jobs:
       contents: read
 
     env:
-      TF_APP:     ${{ github.event.inputs.app }}
-      TF_ENV:     sandbox
-      TF_REGION:  ${{ github.event.inputs.aws_region }}
-      TF_WORKDIR: terraform/${{ github.event.inputs.app }}
+      # App / region resolution:
+      # - workflow_dispatch: use inputs
+      # - push: default to app1-s3-ec2-rds and us-east-1
+      TF_APP: >-
+        ${{
+          github.event_name == 'workflow_dispatch'
+            && github.event.inputs.app
+            || 'app1-s3-ec2-rds'
+        }}
+      TF_ENV: sandbox
+      TF_REGION: >-
+        ${{
+          github.event_name == 'workflow_dispatch'
+            && github.event.inputs.aws_region
+            || 'us-east-1'
+        }}
+      TF_WORKDIR: >-
+        terraform/${{
+          github.event_name == 'workflow_dispatch'
+            && github.event.inputs.app
+            || 'app1-s3-ec2-rds'
+        }}
       TF_LOG: INFO
 
     steps:
@@ -45,18 +73,19 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
           role-session-name: github-actions-sandbox
-          aws-region: ${{ github.event.inputs.aws_region }}
+          aws-region: ${{ env.TF_REGION }}
 
       - name: Show deployment context
         run: |
           echo "=== Terraform Deploy Context (SANDBOX) ==="
-          echo "Terraform app:   ${TF_APP}"
-          echo "Environment:     ${TF_ENV}"
-          echo "AWS region:      ${TF_REGION}"
-          echo "Working dir:     ${TF_WORKDIR}"
-          echo "Confirm apply:   ${{ github.event.inputs.confirm_apply }}"
-          echo "Git ref:         $GITHUB_REF"
-          echo "Git SHA:         $GITHUB_SHA"
+          echo "Trigger:            ${{ github.event_name }}"
+          echo "Branch:             $GITHUB_REF"
+          echo "Terraform app:      ${TF_APP}"
+          echo "Environment:        ${TF_ENV}"
+          echo "AWS region:         ${TF_REGION}"
+          echo "Working dir:        ${TF_WORKDIR}"
+          echo "Git SHA:            $GITHUB_SHA"
+          echo "Confirm apply (raw): ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
           echo "========================================="
 
       - name: Setup Terraform
@@ -79,9 +108,13 @@ jobs:
           TF_VAR_aws_region:  ${{ env.TF_REGION }}
         run: terraform plan -compact-warnings
 
-      # For sandbox we allow apply from any branch, but still require "APPLY"
+      # Apply only when:
+      # - It is a workflow_dispatch event AND
+      # - confirm_apply == "APPLY"
       - name: Terraform Apply (SANDBOX, requires confirm_apply == "APPLY")
-        if: github.event.inputs.confirm_apply == 'APPLY'
+        if: >
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.confirm_apply == 'APPLY'
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}
