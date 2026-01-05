@@ -1,4 +1,4 @@
-name: Deploy Frontend Fargate
+name: Deploy Frontend Fargate CI/CD Deployment to AWS
 
 on:
   push:
@@ -63,4 +63,5 @@ jobs:
       #     service: ${{ env.FRONTEND_SERVICE }}
       #     cluster: ${{ env.ECS_CLUSTER }}
       #     wait-for-service-stability: true
+
 
