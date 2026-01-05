@@ -6,7 +6,7 @@ on:
       - main
       - Fargate-BE
     paths:
-      - 'Project2-Fargate/Backend/**'                    # Updated path
+      - 'Apps/App2-Fargate/Backend/**'                    # Updated path
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
@@ -54,4 +54,5 @@ jobs:
           #   --zip-file fileb://deployment.zip
           #
           # Or call a deployment script, e.g.:
+
           # ./deploy-backend.sh
