@@ -6,7 +6,9 @@ on:
       - main
       - Fargate-BE
     paths:
-      - 'Apps/App2-Fargate/Backend/**'          # Correct backend path
+      # Trigger when anything in the backend changes
+      - 'App2-Fargate/Backend/**'
+      # Or when this workflow file changes
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
@@ -27,31 +29,32 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Build backend
-        working-directory: Apps/App2-Fargate/Backend
+        working-directory: App2-Fargate/Backend
         run: |
           echo "Building App2 Fargate backend..."
-          # Example build commands (uncomment/adjust for your stack):
+          # TODO: uncomment and adapt for your stack:
           # npm install
           # npm run build
           # mvn clean package
           # dotnet build
 
       - name: Deploy backend
-        working-directory: Apps/App2-Fargate/Backend
+        working-directory: App2-Fargate/Backend
         run: |
           echo "Deploying App2 Fargate backend..."
-          # Example deployment commands (adjust to your environment):
+          # TODO: replace with your real deployment commands, e.g.:
+
           # For ECS:
           # aws ecs update-service \
           #   --cluster your-cluster \
           #   --service your-backend-service \
           #   --force-new-deployment
-          #
+
           # For Lambda:
           # zip -r deployment.zip .
           # aws lambda update-function-code \
           #   --function-name your-function \
           #   --zip-file fileb://deployment.zip
-          #
-          # Or call a deployment script, e.g.:
+
+          # Or call a deployment script:
           # ./deploy-backend.sh
