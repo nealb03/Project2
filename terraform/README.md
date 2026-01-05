@@ -1,4 +1,4 @@
-## Terraform Apps & GitHub Actions Workflows
+## Terraform Apps & GitHub Actions Workflows:
 
 This folder contains multiple Terraform “apps” and two reusable GitHub Actions workflows:
 
@@ -109,3 +109,4 @@ terraform plan -compact-warnings
 
 Conditional terraform apply -auto-approve if:
 github.event.inputs.confirm_apply == 'APPLY'
+
