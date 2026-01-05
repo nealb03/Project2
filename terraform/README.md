@@ -1,6 +1,6 @@
-## Terraform Apps & GitHub Actions Workflows:
+## Terraform Apps & GitHub Actions Workflows
 
-This folder contains multiple Terraform “apps” and two reusable GitHub Actions workflows:
+This folder contains multiple Terraform “apps” and two reusable GitHub Actions workflows
 
 - **Terraform App (Demo)** – safe, read‑only `plan` for interviews/demos
 - **Terraform Deploy (Plan + Apply – Multi‑App, Real Changes)** – full deploy workflow that can plan and apply for any app under `terraform/`
@@ -109,4 +109,5 @@ terraform plan -compact-warnings
 
 Conditional terraform apply -auto-approve if:
 github.event.inputs.confirm_apply == 'APPLY'
+
 
