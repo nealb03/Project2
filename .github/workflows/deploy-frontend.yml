@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'Project2-Fargate/Frontend/**'              # Updated path
+      - 'Apps/App2-Fargate/Frontend/**'              # Updated path
       - '.github/workflows/deploy-frontend.yml'
   workflow_dispatch:
 
@@ -62,4 +62,5 @@ jobs:
       #     task-definition: path/to/your-task-def.json
       #     service: ${{ env.FRONTEND_SERVICE }}
       #     cluster: ${{ env.ECS_CLUSTER }}
+
       #     wait-for-service-stability: true
