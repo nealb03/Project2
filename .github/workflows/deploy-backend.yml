@@ -1,4 +1,4 @@
-name: Backend CI/CD Deployment to AWS
+name: Deploy Backend Fargate CI/CD Deployment to AWS
 
 on:
   push:
@@ -58,3 +58,4 @@ jobs:
 
           # Or call a deployment script:
           # ./deploy-backend.sh
+
