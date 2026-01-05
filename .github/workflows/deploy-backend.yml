@@ -6,7 +6,7 @@ on:
       - main
       - Fargate-BE
     paths:
-      - 'Apps/App2-Fargate/Backend/**'                    # Updated path
+      - 'Apps/App2-Fargate/Backend/**'          # Correct backend path
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout backend code
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Configure AWS credentials
@@ -27,9 +27,9 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Build backend
-        working-directory: Project2-Fargate/Backend      # Updated path
+        working-directory: Apps/App2-Fargate/Backend
         run: |
-          echo "Building Project2 Fargate backend..."
+          echo "Building App2 Fargate backend..."
           # Example build commands (uncomment/adjust for your stack):
           # npm install
           # npm run build
@@ -37,9 +37,9 @@ jobs:
           # dotnet build
 
       - name: Deploy backend
-        working-directory: Project2-Fargate/Backend      # Updated path
+        working-directory: Apps/App2-Fargate/Backend
         run: |
-          echo "Deploying Project2 Fargate backend..."
+          echo "Deploying App2 Fargate backend..."
           # Example deployment commands (adjust to your environment):
           # For ECS:
           # aws ecs update-service \
@@ -54,5 +54,4 @@ jobs:
           #   --zip-file fileb://deployment.zip
           #
           # Or call a deployment script, e.g.:
-
           # ./deploy-backend.sh
