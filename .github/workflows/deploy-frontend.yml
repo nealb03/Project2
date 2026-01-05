@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'Apps/App2-Fargate/Frontend/**'              # Updated path
+      - 'App2-Fargate/Frontend/**'              # Correct path from repo root
       - '.github/workflows/deploy-frontend.yml'
   workflow_dispatch:
 
@@ -28,11 +28,11 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        working-directory: Project2-Fargate/Frontend    # Updated path
+        working-directory: App2-Fargate/Frontend
         run: npm install
 
       - name: Build frontend
-        working-directory: Project2-Fargate/Frontend    # Updated path
+        working-directory: App2-Fargate/Frontend
         run: npm run build
 
       - name: Configure AWS credentials
@@ -53,7 +53,7 @@ jobs:
       #     ECR_REPOSITORY: your-frontend-ecr-repo
       #     IMAGE_TAG: ${{ github.sha }}
       #   run: |
-      #     docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG Project2-Fargate/Frontend
+      #     docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG App2-Fargate/Frontend
       #     docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
       #
       # - name: Deploy to ECS
@@ -62,5 +62,4 @@ jobs:
       #     task-definition: path/to/your-task-def.json
       #     service: ${{ env.FRONTEND_SERVICE }}
       #     cluster: ${{ env.ECS_CLUSTER }}
-
       #     wait-for-service-stability: true
