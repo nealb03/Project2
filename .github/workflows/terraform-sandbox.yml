@@ -1,11 +1,10 @@
 name: Terraform Deploy - SANDBOX
 
 on:
-  # Auto-run planning on Terraform changes
+  # Auto-run planning on Terraform changes from main only
   push:
     branches:
       - main
-      - terraform-modules
     paths:
       - 'terraform/**'
 
@@ -33,6 +32,7 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' && format('for {0}', github.event.inputs.app) || '' }}
     runs-on: ubuntu-latest
 
+    # GitHub Environment: use this to scope sandbox secrets, etc.
     environment: sandbox
 
     permissions:
@@ -40,6 +40,9 @@ jobs:
       contents: read
 
     env:
+      # Fixed environment for this workflow
+      TF_ENV: sandbox
+
       # App / region resolution:
       # - workflow_dispatch: use inputs
       # - push: default to app1-s3-ec2-rds and us-east-1
@@ -49,7 +52,6 @@ jobs:
             && github.event.inputs.app
             || 'app1-s3-ec2-rds'
         }}
-      TF_ENV: sandbox
       TF_REGION: >-
         ${{
           github.event_name == 'workflow_dispatch'
@@ -68,7 +70,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials via OIDC
+      - name: Configure AWS credentials via OIDC (SANDBOX)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
@@ -78,13 +80,13 @@ jobs:
       - name: Show deployment context
         run: |
           echo "=== Terraform Deploy Context (SANDBOX) ==="
-          echo "Trigger:            ${{ github.event_name }}"
-          echo "Branch:             $GITHUB_REF"
-          echo "Terraform app:      ${TF_APP}"
-          echo "Environment:        ${TF_ENV}"
-          echo "AWS region:         ${TF_REGION}"
-          echo "Working dir:        ${TF_WORKDIR}"
-          echo "Git SHA:            $GITHUB_SHA"
+          echo "Trigger:             ${{ github.event_name }}"
+          echo "Branch:              $GITHUB_REF"
+          echo "Terraform app:       ${TF_APP}"
+          echo "Environment:         ${TF_ENV}"
+          echo "AWS region:          ${TF_REGION}"
+          echo "Working dir:         ${TF_WORKDIR}"
+          echo "Git SHA:             $GITHUB_SHA"
           echo "Confirm apply (raw): ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
           echo "========================================="
 
