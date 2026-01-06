@@ -1,11 +1,10 @@
 name: Terraform Deploy - QA
 
 on:
-  # Auto-run planning on Terraform changes (no auto-apply)
+  # Auto-run planning on Terraform changes from main only (no auto-apply)
   push:
     branches:
       - main
-      - terraform-modules
     paths:
       - 'terraform/**'
 
@@ -32,6 +31,7 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' && format('for {0}', github.event.inputs.app) || '' }}
     runs-on: ubuntu-latest
 
+    # GitHub Environment: use this to scope QA secrets, protections, etc.
     environment: qa
 
     permissions:
@@ -39,6 +39,9 @@ jobs:
       contents: read
 
     env:
+      # Fixed environment for this workflow
+      TF_ENV: qa
+
       # For manual runs, use inputs; for push, use defaults
       TF_APP: >-
         ${{
@@ -46,7 +49,6 @@ jobs:
             && github.event.inputs.app
             || 'app1-s3-ec2-rds'
         }}
-      TF_ENV: qa
       TF_REGION: >-
         ${{
           github.event_name == 'workflow_dispatch'
@@ -65,9 +67,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials via OIDC
+      - name: Configure AWS credentials via OIDC (QA)
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          # Use the QA-specific role here if you have one
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
           role-session-name: github-actions-qa
           aws-region: ${{ env.TF_REGION }}
@@ -75,15 +78,15 @@ jobs:
       - name: Show deployment context
         run: |
           echo "=== Terraform Deploy Context (QA) ==="
-          echo "Trigger:          ${{ github.event_name }}"
-          echo "Branch:           $GITHUB_REF"
-          echo "Terraform app:    ${TF_APP}"
-          echo "Environment:      ${TF_ENV}"
-          echo "AWS region:       ${TF_REGION}"
-          echo "Working dir:      ${TF_WORKDIR}"
-          echo "Confirm apply:    ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
-          echo "Git SHA:          $GITHUB_SHA"
-          echo "===================================="
+          echo "Trigger:             ${{ github.event_name }}"
+          echo "Branch:              $GITHUB_REF"
+          echo "Terraform app:       ${TF_APP}"
+          echo "Environment:         ${TF_ENV}"
+          echo "AWS region:          ${TF_REGION}"
+          echo "Working dir:         ${TF_WORKDIR}"
+          echo "Confirm apply (raw): ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
+          echo "Git SHA:             $GITHUB_SHA"
+          echo "====================================="
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
