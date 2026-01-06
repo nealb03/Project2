@@ -1,11 +1,10 @@
 name: Terraform Deploy - PROD
 
 on:
-  # Auto-run planning on Terraform changes (no auto-apply)
+  # Auto-run planning on Terraform changes from main only (no auto-apply)
   push:
     branches:
       - main
-      - terraform-modules
     paths:
       - 'terraform/**'
 
@@ -33,7 +32,7 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' && format('for {0}', github.event.inputs.app) || '' }}
     runs-on: ubuntu-latest
 
-    # GitHub Environment "prod" – can be configured with required reviewers/approvals
+    # GitHub Environment "prod" – configure this with required reviewers/approvals
     environment: prod
 
     # Required for GitHub OIDC -> AWS STS
@@ -42,6 +41,9 @@ jobs:
       contents: read
 
     env:
+      # Fixed environment for this workflow
+      TF_ENV: prod
+
       # For manual runs, use inputs; for push, use defaults
       TF_APP: >-
         ${{
@@ -49,7 +51,6 @@ jobs:
             && github.event.inputs.app
             || 'app1-s3-ec2-rds'
         }}
-      TF_ENV: prod
       TF_REGION: >-
         ${{
           github.event_name == 'workflow_dispatch'
@@ -70,9 +71,10 @@ jobs:
         uses: actions/checkout@v4
 
       # 2) Configure AWS credentials via OIDC (no long-lived keys)
-      - name: Configure AWS credentials via OIDC
+      - name: Configure AWS credentials via OIDC (PROD)
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          # Use the PROD-specific role here if you have one
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
           role-session-name: github-actions-prod
           aws-region: ${{ env.TF_REGION }}
@@ -81,15 +83,15 @@ jobs:
       - name: Show deployment context
         run: |
           echo "=== Terraform Deploy Context (PROD) ==="
-          echo "Trigger:          ${{ github.event_name }}"
-          echo "Branch:           $GITHUB_REF"
-          echo "Terraform app:    ${TF_APP}"
-          echo "Environment:      ${TF_ENV}"
-          echo "AWS region:       ${TF_REGION}"
-          echo "Working dir:      ${TF_WORKDIR}"
-          echo "Confirm apply:    ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
-          echo "Git SHA:          $GITHUB_SHA"
-          echo "======================================"
+          echo "Trigger:             ${{ github.event_name }}"
+          echo "Branch:              $GITHUB_REF"
+          echo "Terraform app:       ${TF_APP}"
+          echo "Environment:         ${TF_ENV}"
+          echo "AWS region:          ${TF_REGION}"
+          echo "Working dir:         ${TF_WORKDIR}"
+          echo "Confirm apply (raw): ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
+          echo "Git SHA:             $GITHUB_SHA"
+          echo "======================================="
 
       # 4) Install a pinned Terraform version
       - name: Setup Terraform
@@ -123,8 +125,7 @@ jobs:
       #     * Branch is main, AND
       #     * confirm_apply == "APPLY"
       #
-      # Combined with GitHub Environment "prod" approvals, this is very close to
-      # real-world enterprise gating.
+      # Combined with GitHub Environment "prod" approvals, this provides strong gating.
       - name: Terraform Apply (PROD, requires confirm_apply == "APPLY" on main)
         if: >
           github.event_name == 'workflow_dispatch' &&
