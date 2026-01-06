@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - Fargate-BE
+      - terraform-modules
     paths:
       # Trigger when anything in the backend changes
       - 'App2-Fargate/Backend/**'
@@ -56,6 +56,5 @@ jobs:
           #   --function-name your-function \
           #   --zip-file fileb://deployment.zip
 
-          # Or call a deployment script:
+          # Or call a deployment script, e.g.:
           # ./deploy-backend.sh
-

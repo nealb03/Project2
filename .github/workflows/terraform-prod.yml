@@ -1,6 +1,14 @@
 name: Terraform Deploy - PROD
 
 on:
+  # Auto-run planning on Terraform changes (no auto-apply)
+  push:
+    branches:
+      - main
+      - terraform-modules
+    paths:
+      - 'terraform/**'
+
   # Manual trigger: used for real Terraform changes in PROD
   workflow_dispatch:
     inputs:
@@ -20,7 +28,9 @@ on:
 jobs:
   terraform-deploy-prod:
     # This job deploys any Terraform app under ./terraform to the PROD environment.
-    name: Terraform Deploy PROD for ${{ github.event.inputs.app }}
+    name: >-
+      Terraform Deploy PROD
+      ${{ github.event_name == 'workflow_dispatch' && format('for {0}', github.event.inputs.app) || '' }}
     runs-on: ubuntu-latest
 
     # GitHub Environment "prod" – can be configured with required reviewers/approvals
@@ -28,17 +38,30 @@ jobs:
 
     # Required for GitHub OIDC -> AWS STS
     permissions:
-      id-token: write       # allow requesting the OIDC token
-      contents: read        # allow actions/checkout to read the repo
+      id-token: write
+      contents: read
 
     env:
-      # Map inputs to env vars
-      TF_APP:     ${{ github.event.inputs.app }}
-      TF_ENV:     prod
-      TF_REGION:  ${{ github.event.inputs.aws_region }}
-      TF_WORKDIR: terraform/${{ github.event.inputs.app }}
-
-      # Optional: consistent Terraform logging
+      # For manual runs, use inputs; for push, use defaults
+      TF_APP: >-
+        ${{
+          github.event_name == 'workflow_dispatch'
+            && github.event.inputs.app
+            || 'app1-s3-ec2-rds'
+        }}
+      TF_ENV: prod
+      TF_REGION: >-
+        ${{
+          github.event_name == 'workflow_dispatch'
+            && github.event.inputs.aws_region
+            || 'us-east-1'
+        }}
+      TF_WORKDIR: >-
+        terraform/${{
+          github.event_name == 'workflow_dispatch'
+            && github.event.inputs.app
+            || 'app1-s3-ec2-rds'
+        }}
       TF_LOG: INFO
 
     steps:
@@ -52,19 +75,20 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
           role-session-name: github-actions-prod
-          aws-region: ${{ github.event.inputs.aws_region }}
+          aws-region: ${{ env.TF_REGION }}
 
-      # 3) Show deployment context (good for audit & interview discussion)
+      # 3) Show deployment context (good for audit)
       - name: Show deployment context
         run: |
           echo "=== Terraform Deploy Context (PROD) ==="
-          echo "Terraform app:   ${TF_APP}"
-          echo "Environment:     ${TF_ENV}"
-          echo "AWS region:      ${TF_REGION}"
-          echo "Working dir:     ${TF_WORKDIR}"
-          echo "Confirm apply:   ${{ github.event.inputs.confirm_apply }}"
-          echo "Git ref:         $GITHUB_REF"
-          echo "Git SHA:         $GITHUB_SHA"
+          echo "Trigger:          ${{ github.event_name }}"
+          echo "Branch:           $GITHUB_REF"
+          echo "Terraform app:    ${TF_APP}"
+          echo "Environment:      ${TF_ENV}"
+          echo "AWS region:       ${TF_REGION}"
+          echo "Working dir:      ${TF_WORKDIR}"
+          echo "Confirm apply:    ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
+          echo "Git SHA:          $GITHUB_SHA"
           echo "======================================"
 
       # 4) Install a pinned Terraform version
@@ -95,13 +119,17 @@ jobs:
       #
       # Guardrails:
       # - Only runs when:
+      #     * Manual workflow_dispatch
       #     * Branch is main, AND
       #     * confirm_apply == "APPLY"
       #
       # Combined with GitHub Environment "prod" approvals, this is very close to
       # real-world enterprise gating.
       - name: Terraform Apply (PROD, requires confirm_apply == "APPLY" on main)
-        if: github.ref == 'refs/heads/main' && github.event.inputs.confirm_apply == 'APPLY'
+        if: >
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/main' &&
+          github.event.inputs.confirm_apply == 'APPLY'
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}

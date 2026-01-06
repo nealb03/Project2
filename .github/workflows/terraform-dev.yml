@@ -1,6 +1,14 @@
 name: Terraform Deploy - DEV
 
 on:
+  # Auto-run planning on Terraform changes (no auto-apply)
+  push:
+    branches:
+      - main
+      - terraform-modules
+    paths:
+      - 'terraform/**'
+
   # Manual trigger: used for real Terraform changes in DEV
   workflow_dispatch:
     inputs:
@@ -19,7 +27,9 @@ on:
 
 jobs:
   terraform-deploy-dev:
-    name: Terraform Deploy DEV for ${{ github.event.inputs.app }}
+    name: >-
+      Terraform Deploy DEV
+      ${{ github.event_name == 'workflow_dispatch' && format('for {0}', github.event.inputs.app) || '' }}
     runs-on: ubuntu-latest
 
     environment: dev
@@ -29,10 +39,26 @@ jobs:
       contents: read
 
     env:
-      TF_APP:     ${{ github.event.inputs.app }}
-      TF_ENV:     dev
-      TF_REGION:  ${{ github.event.inputs.aws_region }}
-      TF_WORKDIR: terraform/${{ github.event.inputs.app }}
+      # For manual runs, use inputs; for push, use defaults
+      TF_APP: >-
+        ${{
+          github.event_name == 'workflow_dispatch'
+            && github.event.inputs.app
+            || 'app1-s3-ec2-rds'
+        }}
+      TF_ENV: dev
+      TF_REGION: >-
+        ${{
+          github.event_name == 'workflow_dispatch'
+            && github.event.inputs.aws_region
+            || 'us-east-1'
+        }}
+      TF_WORKDIR: >-
+        terraform/${{
+          github.event_name == 'workflow_dispatch'
+            && github.event.inputs.app
+            || 'app1-s3-ec2-rds'
+        }}
       TF_LOG: INFO
 
     steps:
@@ -44,18 +70,19 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
           role-session-name: github-actions-dev
-          aws-region: ${{ github.event.inputs.aws_region }}
+          aws-region: ${{ env.TF_REGION }}
 
       - name: Show deployment context
         run: |
           echo "=== Terraform Deploy Context (DEV) ==="
-          echo "Terraform app:   ${TF_APP}"
-          echo "Environment:     ${TF_ENV}"
-          echo "AWS region:      ${TF_REGION}"
-          echo "Working dir:     ${TF_WORKDIR}"
-          echo "Confirm apply:   ${{ github.event.inputs.confirm_apply }}"
-          echo "Git ref:         $GITHUB_REF"
-          echo "Git SHA:         $GITHUB_SHA"
+          echo "Trigger:          ${{ github.event_name }}"
+          echo "Branch:           $GITHUB_REF"
+          echo "Terraform app:    ${TF_APP}"
+          echo "Environment:      ${TF_ENV}"
+          echo "AWS region:       ${TF_REGION}"
+          echo "Working dir:      ${TF_WORKDIR}"
+          echo "Confirm apply:    ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
+          echo "Git SHA:          $GITHUB_SHA"
           echo "====================================="
 
       - name: Setup Terraform
@@ -78,8 +105,15 @@ jobs:
           TF_VAR_aws_region:  ${{ env.TF_REGION }}
         run: terraform plan -compact-warnings
 
+      # Apply only when:
+      # - manual workflow_dispatch
+      # - on main branch
+      # - confirm_apply == "APPLY"
       - name: Terraform Apply (DEV, requires confirm_apply == "APPLY" on main)
-        if: github.ref == 'refs/heads/main' && github.event.inputs.confirm_apply == 'APPLY'
+        if: >
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/main' &&
+          github.event.inputs.confirm_apply == 'APPLY'
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}

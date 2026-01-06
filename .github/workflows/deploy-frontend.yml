@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - terraform-modules
     paths:
       - 'App2-Fargate/Frontend/**'              # Correct path from repo root
       - '.github/workflows/deploy-frontend.yml'
@@ -63,5 +64,3 @@ jobs:
       #     service: ${{ env.FRONTEND_SERVICE }}
       #     cluster: ${{ env.ECS_CLUSTER }}
       #     wait-for-service-stability: true
-
-
