@@ -37,13 +37,13 @@ variable "public_subnet_cidrs" {
 }
 
 variable "availability_zones" {
-  description = "List of availability zones used to create subnets. Must match the number of public_subnet_cidrs."
+  description = "List of availability zones used to create subnets. Must align with public_subnet_cidrs (validated in main.tf)."
   type        = list(string)
   default     = ["us-east-1a", "us-east-1b"]
 
   validation {
-    condition     = length(var.availability_zones) == length(var.public_subnet_cidrs)
-    error_message = "availability_zones must be the same length as public_subnet_cidrs."
+    condition     = length(var.availability_zones) >= 1
+    error_message = "availability_zones must contain at least one availability zone."
   }
 }
 
@@ -108,7 +108,7 @@ variable "db_master_username" {
 }
 
 variable "db_master_password" {
-  description = "Master password for the RDS instance (demo). Do not use a real password in demo code."
+  description = "Master password for the RDS instance (demo)."
   type        = string
   sensitive   = true
 
@@ -146,7 +146,7 @@ variable "ecs_task_cpu" {
 }
 
 variable "ecs_task_memory" {
-  description = "Fargate task memory (MiB). Must be compatible with ecs_task_cpu."
+  description = "Fargate task memory (MiB). Must be compatible with ecs_task_cpu (validated by AWS)."
   type        = number
   default     = 512
 
@@ -157,22 +157,22 @@ variable "ecs_task_memory" {
 }
 
 variable "ecs_execution_role_arn" {
-  description = "ARN of the ECS task execution role (used by ECS agent to pull images, write logs, etc.)"
+  description = "ARN of the ECS task execution role"
   type        = string
 
   validation {
     condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.+", var.ecs_execution_role_arn))
-    error_message = "ecs_execution_role_arn must look like an IAM role ARN (arn:aws:iam::123456789012:role/RoleName)."
+    error_message = "ecs_execution_role_arn must look like arn:aws:iam::123456789012:role/RoleName."
   }
 }
 
 variable "ecs_task_role_arn" {
-  description = "ARN of the ECS task role (used by your application code at runtime)"
+  description = "ARN of the ECS task role"
   type        = string
 
   validation {
     condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.+", var.ecs_task_role_arn))
-    error_message = "ecs_task_role_arn must look like an IAM role ARN (arn:aws:iam::123456789012:role/RoleName)."
+    error_message = "ecs_task_role_arn must look like arn:aws:iam::123456789012:role/RoleName."
   }
 }
 

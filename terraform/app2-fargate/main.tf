@@ -13,7 +13,7 @@ provider "aws" {
 }
 
 ############################
-# VPC and Networking
+# Cross-variable validation (safe place)
 ############################
 
 resource "aws_vpc" "main" {
@@ -22,7 +22,18 @@ resource "aws_vpc" "main" {
   enable_dns_hostnames = true
 
   tags = { Name = "fargate-vpc" }
+
+  lifecycle {
+    precondition {
+      condition     = length(var.availability_zones) == length(var.public_subnet_cidrs)
+      error_message = "availability_zones and public_subnet_cidrs must be the same length (one subnet per AZ)."
+    }
+  }
 }
+
+############################
+# Networking
+############################
 
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
@@ -91,7 +102,6 @@ resource "aws_security_group" "rds_sg" {
   description = "SG for RDS (demo internet access)"
   vpc_id      = aws_vpc.main.id
 
-  # Demo: allow MySQL from YOUR IP only
   ingress {
     from_port   = 3306
     to_port     = 3306
@@ -99,7 +109,6 @@ resource "aws_security_group" "rds_sg" {
     cidr_blocks = [var.my_ip_cidr]
   }
 
-  # Allow ECS tasks to reach DB too
   ingress {
     from_port       = 3306
     to_port         = 3306
@@ -124,8 +133,7 @@ resource "aws_security_group" "rds_sg" {
 resource "aws_db_subnet_group" "db_subnet_group" {
   name       = "${var.db_identifier}-subnet-group"
   subnet_ids = aws_subnet.public[*].id
-
-  tags = { Name = "${var.db_identifier}-subnet-group" }
+  tags       = { Name = "${var.db_identifier}-subnet-group" }
 }
 
 ############################
@@ -142,7 +150,6 @@ resource "aws_db_instance" "db" {
   password          = var.db_master_password
   db_name           = var.db_name
 
-  # Demo requirement:
   publicly_accessible = true
   skip_final_snapshot = true
 
@@ -168,7 +175,7 @@ resource "aws_ecs_cluster" "cluster" {
 resource "aws_ecs_task_definition" "task" {
   family = var.ecs_task_family
 
-  # These are strings in the ECS API. Our variables are numbers, so convert safely.
+  # ECS API expects strings; variables are numbers -> convert safely.
   cpu    = tostring(var.ecs_task_cpu)
   memory = tostring(var.ecs_task_memory)
 
@@ -190,26 +197,11 @@ resource "aws_ecs_task_definition" "task" {
       ]
 
       environment = [
-        {
-          name  = "DB_HOST"
-          value = aws_db_instance.db.address
-        },
-        {
-          name  = "DB_PORT"
-          value = tostring(aws_db_instance.db.port)
-        },
-        {
-          name  = "DB_USER"
-          value = var.db_master_username
-        },
-        {
-          name  = "DB_PASS"
-          value = var.db_master_password
-        },
-        {
-          name  = "DB_NAME"
-          value = var.db_name
-        }
+        { name = "DB_HOST", value = aws_db_instance.db.address },
+        { name = "DB_PORT", value = tostring(aws_db_instance.db.port) },
+        { name = "DB_USER", value = var.db_master_username },
+        { name = "DB_PASS", value = var.db_master_password },
+        { name = "DB_NAME", value = var.db_name }
       ]
     }
   ])
