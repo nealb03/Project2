@@ -1,4 +1,4 @@
-name: Terraform Deploy - PROD
+name: Terraform Deploy App1 - QA
 
 on:
   # Auto-run planning on Terraform changes from main only (no auto-apply)
@@ -6,9 +6,9 @@ on:
     branches: [main]
     paths:
       - "terraform/**"
-      - ".github/workflows/terraform-prod.yml"
+      - ".github/workflows/terraform-app1-qa.yml"
 
-  # Manual trigger: used for real Terraform changes in PROD
+  # Manual trigger: used for real Terraform changes in QA
   workflow_dispatch:
     inputs:
       app:
@@ -28,16 +28,14 @@ on:
         required: true
         default: "true"
       confirm_apply:
-        description: 'Type "APPLY" to confirm you understand this will change real infrastructure in PROD'
+        description: 'Type "APPLY" to confirm you understand this will change real infrastructure in QA'
         required: true
         default: "NO"
 
 jobs:
-  terraform-prod:
+  terraform-qa:
     runs-on: ubuntu-latest
-
-    # GitHub Environment "prod" – configure approvals/reviewers in repo settings
-    environment: prod
+    environment: qa
 
     permissions:
       id-token: write
@@ -47,7 +45,7 @@ jobs:
       TF_IN_AUTOMATION: "true"
       TF_LOG: INFO
 
-      TF_ENV: prod
+      TF_ENV: qa
 
       TF_APP: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app || 'app1-s3-ec2-rds' }}
       TF_REGION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.aws_region || 'us-east-1' }}
@@ -59,7 +57,7 @@ jobs:
 
       # Pass region/environment into Terraform variables
       TF_VAR_aws_region: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.aws_region || 'us-east-1' }}
-      TF_VAR_environment: prod
+      TF_VAR_environment: qa
 
       # IMPORTANT: fixed AMI ID to avoid ec2:DescribeImages permission failures
       TF_VAR_windows_ami_id: "ami-0f6d3d1de3c02ee19"
@@ -68,18 +66,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials via OIDC (PROD)
+      - name: Configure AWS credentials via OIDC (QA)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
-          role-session-name: github-actions-prod
+          role-session-name: github-actions-qa
           aws-region: ${{ env.TF_REGION }}
 
       - name: Show deployment context
         shell: bash
         run: |
           set -euo pipefail
-          echo "=== Terraform Deploy Context (PROD) ==="
+          echo "=== Terraform Deploy Context (QA) ==="
           echo "Trigger:               ${{ github.event_name }}"
           echo "Branch/Ref:            $GITHUB_REF"
           echo "Terraform app:         ${TF_APP}"
@@ -91,7 +89,7 @@ jobs:
           echo "Enable EC2:            ${ENABLE_EC2}"
           echo "Enable S3 Website:     ${ENABLE_S3_WEBSITE}"
           echo "Windows AMI (TF_VAR):  ${TF_VAR_windows_ami_id}"
-          echo "======================================="
+          echo "====================================="
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -118,12 +116,11 @@ jobs:
             -var="enable_ec2=${{ env.ENABLE_EC2 }}" \
             -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"
 
-      # Apply guardrails:
+      # Apply only when:
       # - manual workflow_dispatch
-      # - main branch
-      # - explicit confirm_apply == "APPLY"
-      # - plus GitHub Environment "prod" approvals (recommended)
-      - name: Terraform Apply (PROD, requires confirm_apply == "APPLY" on main)
+      # - on main branch
+      # - confirm_apply == "APPLY"
+      - name: Terraform Apply (QA, requires confirm_apply == "APPLY" on main)
         if: >
           github.event_name == 'workflow_dispatch' &&
           github.ref == 'refs/heads/main' &&
