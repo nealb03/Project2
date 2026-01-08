@@ -6,14 +6,19 @@ on:
       - main
       - terraform-modules
     paths:
-      - 'App2-Fargate/Frontend/**'              # Correct path from repo root
+      - 'App2-Fargate/Frontend/**'
       - '.github/workflows/deploy-frontend.yml'
   workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Set to true to apply deployment'
+        required: false
+        default: 'false'
 
 env:
   AWS_REGION: us-east-1
-  ECS_CLUSTER: your-ecs-cluster-name
-  FRONTEND_SERVICE: your-frontend-service-name
+  ECS_CLUSTER: brentaneal-cluster
+  FRONTEND_SERVICE: brentaneal-frontend-service
 
 jobs:
   build-and-deploy-frontend:
@@ -43,24 +48,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Example: build & push Docker image to ECR (if you containerize frontend)
-      # - name: Login to Amazon ECR
-      #   id: login-ecr
-      #   uses: aws-actions/amazon-ecr-login@v2
-      #
-      # - name: Build, tag, and push image to ECR
-      #   env:
-      #     ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-      #     ECR_REPOSITORY: your-frontend-ecr-repo
-      #     IMAGE_TAG: ${{ github.sha }}
-      #   run: |
-      #     docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG App2-Fargate/Frontend
-      #     docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-      #
-      # - name: Deploy to ECS
-      #   uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-      #   with:
-      #     task-definition: path/to/your-task-def.json
-      #     service: ${{ env.FRONTEND_SERVICE }}
-      #     cluster: ${{ env.ECS_CLUSTER }}
-      #     wait-for-service-stability: true
+      # Conditional apply deployment step
+      - name: Deploy to ECS (Conditional Apply)
+        if: github.event.inputs.apply == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: path/to/your-task-def.json
+          service: ${{ env.FRONTEND_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
