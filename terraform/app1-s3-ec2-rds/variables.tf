@@ -1,78 +1,103 @@
-########################################
-# Core environment / app configuration #
-########################################
-
-variable "environment" {
-  description = "Deployment environment name (e.g. sandbox, dev, qa, prod)"
-  type        = string
-  default     = "sandbox"
-}
-
-variable "app_name" {
-  description = "Logical name of the application"
-  type        = string
-  default     = "app1-s3-ec2-rds"
-}
-
 variable "aws_region" {
-  description = "AWS region"
+  description = "AWS region to deploy into."
   type        = string
   default     = "us-east-1"
 }
 
-########################################
-# Infra tuning for the app_stack module #
-########################################
-
-variable "instance_type" {
-  description = "EC2 instance type used by the app_stack module"
+variable "environment" {
+  description = "Environment name (e.g., sandbox/dev/prod)."
   type        = string
-  default     = "t3.micro"
+  default     = "sandbox"
 }
 
-variable "db_engine" {
-  description = "Database engine used by the app_stack module"
+variable "my_ip_cidr" {
+  description = "Your public IP with CIDR suffix for RDP access."
   type        = string
-  default     = "postgres"
+  default     = "0.0.0.0/0"
 }
 
-##########################
-# Demo / metadata fields #
-##########################
-
-variable "github_repository" {
-  description = "Full GitHub repository slug (owner/repo) where this Terraform code lives (demo/logging only)"
-  type        = string
-  default     = "nealb03/Apps"
-}
-
-# These are kept as plain strings for demo/logging purposes.
-# They are NOT used to actually authenticate or call AWS.
-
-variable "aws_account_id" {
-  description = "AWS account ID (demo string only, not used to call AWS)"
-  type        = string
-  default     = "288761763536"
-}
-
-variable "iam_user_arn" {
-  description = "IAM user ARN for GitHub Actions (demo string only, not used to call AWS)"
-  type        = string
-  default     = "arn:aws:iam::288761763536:user/github-actions-user"
-}
-
-##########################################
-# Optional, unused demo feature switches #
-##########################################
-
-variable "enable_encryption" {
-  description = "Demo flag (not used in this sample configuration)"
+variable "enable_ec2" {
+  description = "If true, create backend EC2 resources."
   type        = bool
-  default     = false
+  default     = true
 }
 
-variable "enable_versioning" {
-  description = "Demo flag (not used in this sample configuration)"
+variable "enable_s3_website" {
+  description = "If true, create S3 static website resources."
   type        = bool
-  default     = false
+  default     = true
+}
+
+variable "windows_ami_id" {
+  description = "Windows Server AMI ID used for the backend instance (avoids DescribeImages)."
+  type        = string
+  default     = "ami-0f6d3d1de3c02ee19"
+}
+
+variable "ec2_instance_type" {
+  description = "Backend EC2 instance type."
+  type        = string
+  default     = "t3.medium"
+}
+
+variable "ec2_key_name" {
+  description = "EC2 key pair name for RDP access."
+  type        = string
+  default     = "keypair-vpc1"
+}
+
+variable "db_instance_identifier" {
+  description = "Identifier for the RDS instance."
+  type        = string
+  default     = "cloud495"
+}
+
+variable "db_name" {
+  description = "Database name."
+  type        = string
+  default     = "cloud495"
+}
+
+variable "db_username" {
+  description = "RDS master username (preferred key)."
+  type        = string
+  default     = ""
+}
+
+variable "db_password" {
+  description = "RDS master password (preferred key)."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "db_master_username" {
+  description = "RDS master username (legacy tfvars key)."
+  type        = string
+  default     = ""
+}
+
+variable "db_master_password" {
+  description = "RDS master password (legacy tfvars key)."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "s3_bucket_name" {
+  description = "Globally unique S3 bucket name for frontend static website."
+  type        = string
+  default     = "nealb03-frontend-bucket-unique-2887"
+}
+
+variable "az_a" {
+  description = "Availability zone A."
+  type        = string
+  default     = "us-east-1a"
+}
+
+variable "az_b" {
+  description = "Availability zone B."
+  type        = string
+  default     = "us-east-1b"
 }

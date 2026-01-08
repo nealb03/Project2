@@ -1,5 +1,6 @@
-# Demo Environment Configuration
-environment        = "demo"
-aws_region        = "us-east-1"
-enable_versioning = true
-enable_encryption = true
+my_ip_cidr          = "203.0.113.25/32"
+db_master_username  = "admin"
+db_master_password  = "password"
+ecs_execution_role_arn = "arn:aws:iam::123456789012:role/ecsExecutionRole"
+ecs_task_role_arn      = "arn:aws:iam::123456789012:role/ecsTaskRole"
+container_image        = "yourdockerhubusername/yourapp2image:latest"

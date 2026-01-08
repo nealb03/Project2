@@ -1,98 +1,218 @@
 terraform {
-  required_version = ">= 1.5.0"
-
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.5"
-    }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.2"
-    }
   }
-
-  # Demo-only: keep state local on the runner / machine.
-  backend "local" {}
+  required_version = ">= 1.2.0"
 }
-
-########################
-# AWS Provider (root)  #
-########################
 
 provider "aws" {
   region = var.aws_region
 }
 
-locals {
-  common_tags = {
-    Application = var.app_name
-    Environment = var.environment
-    ManagedBy   = "terraform"
-  }
+############################
+# VPC and Networking
+############################
+
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = { Name = "fargate-vpc" }
 }
 
-###########################################
-# Reusable application stack (child module)
-###########################################
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
 
-# For interview purposes, we’ll reuse the same app_stack module
-# to show a common pattern across multiple apps.
-# In a real-world Fargate app you might have a different module,
-# but this cleanly demonstrates module reuse.
+  tags = { Name = "fargate-igw" }
+}
 
-module "app_stack" {
-  source = "../modules/app_stack"
+resource "aws_subnet" "public" {
+  count                   = length(var.public_subnet_cidrs)
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidrs[count.index]
+  map_public_ip_on_launch = true
+  availability_zone       = var.availability_zones[count.index]
 
-  environment   = var.environment
-  aws_region    = var.aws_region
-  app_name      = var.app_name
-  instance_type = var.instance_type
-  db_engine     = var.db_engine
-  tags          = local.common_tags
+  tags = { Name = "public-subnet-${count.index + 1}" }
+}
+
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.main.id
+
+  tags = { Name = "public-route-table" }
+}
+
+resource "aws_route" "internet_access" {
+  route_table_id         = aws_route_table.public_rt.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.igw.id
+}
+
+resource "aws_route_table_association" "pub_subnet_assoc" {
+  count          = length(aws_subnet.public)
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public_rt.id
 }
 
 ############################
-# Random deployment suffix #
+# Security Group for ECS Tasks
 ############################
 
-resource "random_string" "suffix" {
-  length  = 8
-  special = false
-  upper   = false
+resource "aws_security_group" "ecs_sg" {
+  name        = "ecs-tasks-sg"
+  description = "Allow HTTP inbound to Fargate tasks"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = var.allowed_http_port
+    to_port     = var.allowed_http_port
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "ecs-tasks-sg" }
 }
 
-###################################
-# Demo logging of this deployment #
-###################################
+############################
+# RDS Security Group
+############################
 
-resource "null_resource" "app2_deployment" {
-  triggers = {
-    deployment_id = random_string.suffix.result
-    timestamp     = timestamp()
+resource "aws_security_group" "rds_sg" {
+  name        = "rds-sg"
+  description = "SG for RDS"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip_cidr]
   }
 
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "=================================================="
-      echo "Terraform Demo Deployment - App2-Fargate (root)"
-      echo "Deployment ID:      ${random_string.suffix.result}"
-      echo "Environment:        ${var.environment}"
-      echo "App Name:           ${var.app_name}"
-      echo "GitHub Repository:  ${var.github_repository}"
-      echo "AWS Account ID:     ${var.aws_account_id}"
-      echo "AWS Region:         ${var.aws_region}"
-      echo "IAM User ARN:       ${var.iam_user_arn}"
-      echo "--------------------------------------------------"
-      echo "Module Outputs:"
-      echo "  S3 Bucket Name:   ${module.app_stack.bucket_name}"
-      echo "  EC2 Instance ID:  ${module.app_stack.instance_id}"
-      echo "  RDS Endpoint:     ${module.app_stack.db_endpoint}"
-      echo "=================================================="
-    EOT
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = { Name = "rds-sg" }
+}
+
+############################
+# RDS subnet group
+############################
+
+resource "aws_db_subnet_group" "db_subnet_group" {
+  name       = "${var.db_identifier}-subnet-group"
+  subnet_ids = aws_subnet.public.*.id
+
+  tags = { Name = "${var.db_identifier}-subnet-group" }
+}
+
+############################
+# RDS Instance
+############################
+
+resource "aws_db_instance" "db" {
+  identifier             = var.db_identifier
+  engine                 = var.db_engine
+  engine_version         = var.db_engine_version
+  instance_class         = var.db_instance_class
+  allocated_storage      = var.db_allocated_storage
+  username               = var.db_master_username
+  password               = var.db_master_password
+  db_name                = var.db_name
+  publicly_accessible    = false
+  skip_final_snapshot    = true
+  vpc_security_group_ids = [aws_security_group.rds_sg.id]
+  db_subnet_group_name   = aws_db_subnet_group.db_subnet_group.name
+  multi_az               = false
+
+  tags = { Name = var.db_identifier }
+}
+
+############################
+# ECS Cluster
+############################
+
+resource "aws_ecs_cluster" "cluster" {
+  name = "fargate-cluster"
+}
+
+############################
+# ECS Task Definition
+
+############################
+
+resource "aws_ecs_task_definition" "task" {
+  family                   = var.ecs_task_family
+  cpu                      = var.ecs_task_cpu
+  memory                   = var.ecs_task_memory
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  execution_role_arn       = var.ecs_execution_role_arn
+  task_role_arn            = var.ecs_task_role_arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "app2-container"
+      image     = var.container_image
+      portMappings = [
+        {
+          containerPort = var.allowed_http_port
+          protocol      = "tcp"
+        }
+      ]
+      environment = [
+        {
+          name  = "DB_HOST"
+          value = aws_db_instance.db.endpoint
+        },
+        {
+          name  = "DB_USER"
+          value = var.db_master_username
+        },
+        {
+          name  = "DB_PASS"
+          value = var.db_master_password
+        },
+        {
+          name  = "DB_NAME"
+          value = var.db_name
+        }
+      ]
+    }
+  ])
+}
+
+############################
+# ECS Service
+############################
+
+resource "aws_ecs_service" "service" {
+  name            = "fargate-service"
+  cluster         = aws_ecs_cluster.cluster.id
+  task_definition = aws_ecs_task_definition.task.arn
+  desired_count   = var.ecs_desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets         = aws_subnet.public.*.id
+    security_groups = [aws_security_group.ecs_sg.id]
+    assign_public_ip = true
+  }
+
+  depends_on = [aws_db_instance.db]
 }

@@ -1,75 +1,104 @@
-########################################
-# Core environment / app configuration #
-########################################
-
-variable "environment" {
-  description = "Deployment environment name (e.g. sandbox, dev, qa, prod)"
-  type        = string
-  default     = "sandbox"
-}
-
-variable "app_name" {
-  description = "Logical name of the application"
-  type        = string
-  default     = "app2-fargate"
-}
-
 variable "aws_region" {
-  description = "AWS region"
-  type        = string
-  default     = "us-east-1"
+  type    = string
+  default = "us-east-1"
 }
 
-########################################
-# Infra tuning for the app_stack module #
-########################################
-
-variable "instance_type" {
-  description = "EC2 instance type used by the app_stack module"
+variable "my_ip_cidr" {
+  description = "CIDR for accessing RDS and ECS tasks"
   type        = string
-  default     = "t3.micro"
+}
+
+variable "vpc_cidr" {
+  type    = string
+  default = "10.0.0.0/16"
+}
+
+variable "public_subnet_cidrs" {
+  type    = list(string)
+  default = ["10.0.1.0/24", "10.0.2.0/24"]
+}
+
+variable "availability_zones" {
+  description = "List of availability zones"
+  type        = list(string)
+  default     = ["us-east-1a", "us-east-1b"]
+}
+
+variable "allowed_http_port" {
+  type    = number
+  default = 80
+}
+
+variable "db_identifier" {
+  type    = string
+  default = "app2-db"
 }
 
 variable "db_engine" {
-  description = "Database engine used by the app_stack module"
-  type        = string
-  default     = "postgres"
+  type    = string
+  default = "mysql"
 }
 
-##########################
-# Demo / metadata fields #
-##########################
-
-variable "github_repository" {
-  description = "Full GitHub repository slug (owner/repo) where this Terraform code lives (demo/logging only)"
-  type        = string
-  default     = "nealb03/Apps"
+variable "db_engine_version" {
+  type    = string
+  default = "8.0"
 }
 
-variable "aws_account_id" {
-  description = "AWS account ID (demo string only, not used to call AWS)"
-  type        = string
-  default     = "288761763536"
+variable "db_instance_class" {
+  type    = string
+  default = "db.t3.micro"
 }
 
-variable "iam_user_arn" {
-  description = "IAM user ARN for GitHub Actions (demo string only, not used to call AWS)"
-  type        = string
-  default     = "arn:aws:iam::288761763536:user/github-actions-user"
+variable "db_allocated_storage" {
+  type    = number
+  default = 20
 }
 
-##########################################
-# Optional, unused demo feature switches #
-##########################################
-
-variable "enable_encryption" {
-  description = "Demo flag (not used in this sample configuration)"
-  type        = bool
-  default     = false
+variable "db_master_username" {
+  type = string
 }
 
-variable "enable_versioning" {
-  description = "Demo flag (not used in this sample configuration)"
-  type        = bool
-  default     = false
+variable "db_master_password" {
+  type      = string
+  sensitive = true
+}
+
+variable "db_name" {
+  type    = string
+  default = "app2db"
+}
+
+variable "ecs_task_family" {
+  type    = string
+  default = "app2-fargate-task"
+}
+
+variable "ecs_task_cpu" {
+  type    = string
+  default = "256"
+}
+
+variable "ecs_task_memory" {
+  type    = string
+  default = "512"
+}
+
+variable "ecs_execution_role_arn" {
+  type = string
+  description = "ARN of ECS task execution role"
+}
+
+variable "ecs_task_role_arn" {
+  type = string
+  description = "ARN of ECS task role"
+}
+
+variable "container_image" {
+  type = string
+  description = "Container image for the ECS task (e.g., AWS ECR or Docker Hub image)"
+}
+
+variable "ecs_desired_count" {
+  type    = number
+  default = 1
 }
