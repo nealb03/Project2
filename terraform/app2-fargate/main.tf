@@ -26,8 +26,7 @@ resource "aws_vpc" "main" {
 
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
-
-  tags = { Name = "fargate-igw" }
+  tags   = { Name = "fargate-igw" }
 }
 
 resource "aws_subnet" "public" {
@@ -42,8 +41,7 @@ resource "aws_subnet" "public" {
 
 resource "aws_route_table" "public_rt" {
   vpc_id = aws_vpc.main.id
-
-  tags = { Name = "public-route-table" }
+  tags   = { Name = "public-route-table" }
 }
 
 resource "aws_route" "internet_access" {
@@ -85,19 +83,28 @@ resource "aws_security_group" "ecs_sg" {
 }
 
 ############################
-# RDS Security Group
+# RDS Security Group (DEMO: Internet-accessible, locked to your IP)
 ############################
 
 resource "aws_security_group" "rds_sg" {
   name        = "rds-sg"
-  description = "SG for RDS"
+  description = "SG for RDS (demo internet access)"
   vpc_id      = aws_vpc.main.id
 
+  # Demo: allow MySQL from YOUR IP only
   ingress {
     from_port   = 3306
     to_port     = 3306
     protocol    = "tcp"
     cidr_blocks = [var.my_ip_cidr]
+  }
+
+  # Allow ECS tasks to reach DB too
+  ingress {
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs_sg.id]
   }
 
   egress {
@@ -111,31 +118,34 @@ resource "aws_security_group" "rds_sg" {
 }
 
 ############################
-# RDS subnet group
+# RDS Subnet Group (public subnets for demo reachability)
 ############################
 
 resource "aws_db_subnet_group" "db_subnet_group" {
   name       = "${var.db_identifier}-subnet-group"
-  subnet_ids = aws_subnet.public.*.id
+  subnet_ids = aws_subnet.public[*].id
 
   tags = { Name = "${var.db_identifier}-subnet-group" }
 }
 
 ############################
-# RDS Instance
+# RDS Instance (public for demo)
 ############################
 
 resource "aws_db_instance" "db" {
-  identifier             = var.db_identifier
-  engine                 = var.db_engine
-  engine_version         = var.db_engine_version
-  instance_class         = var.db_instance_class
-  allocated_storage      = var.db_allocated_storage
-  username               = var.db_master_username
-  password               = var.db_master_password
-  db_name                = var.db_name
-  publicly_accessible    = false
-  skip_final_snapshot    = true
+  identifier        = var.db_identifier
+  engine            = var.db_engine
+  engine_version    = var.db_engine_version
+  instance_class    = var.db_instance_class
+  allocated_storage = var.db_allocated_storage
+  username          = var.db_master_username
+  password          = var.db_master_password
+  db_name           = var.db_name
+
+  # Demo requirement:
+  publicly_accessible = true
+  skip_final_snapshot = true
+
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   db_subnet_group_name   = aws_db_subnet_group.db_subnet_group.name
   multi_az               = false
@@ -153,13 +163,15 @@ resource "aws_ecs_cluster" "cluster" {
 
 ############################
 # ECS Task Definition
-
 ############################
 
 resource "aws_ecs_task_definition" "task" {
   family                   = var.ecs_task_family
-  cpu                      = var.ecs_task_cpu
-  memory                   = var.ecs_task_memory
+
+  # These are strings in the ECS API. Our variables are numbers, so convert safely.
+  cpu    = tostring(var.ecs_task_cpu)
+  memory = tostring(var.ecs_task_memory)
+
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   execution_role_arn       = var.ecs_execution_role_arn
@@ -167,18 +179,24 @@ resource "aws_ecs_task_definition" "task" {
 
   container_definitions = jsonencode([
     {
-      name      = "app2-container"
-      image     = var.container_image
+      name  = "app2-container"
+      image = var.container_image
+
       portMappings = [
         {
           containerPort = var.allowed_http_port
           protocol      = "tcp"
         }
       ]
+
       environment = [
         {
           name  = "DB_HOST"
-          value = aws_db_instance.db.endpoint
+          value = aws_db_instance.db.address
+        },
+        {
+          name  = "DB_PORT"
+          value = tostring(aws_db_instance.db.port)
         },
         {
           name  = "DB_USER"
@@ -209,8 +227,8 @@ resource "aws_ecs_service" "service" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets         = aws_subnet.public.*.id
-    security_groups = [aws_security_group.ecs_sg.id]
+    subnets          = aws_subnet.public[*].id
+    security_groups  = [aws_security_group.ecs_sg.id]
     assign_public_ip = true
   }
 
