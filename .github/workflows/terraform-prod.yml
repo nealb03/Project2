@@ -65,16 +65,19 @@ jobs:
         }}
       TF_LOG: INFO
 
+      # Set enable_ec2 and enable_s3_website based on app selected
+      ENABLE_EC2: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'app1-s3-ec2-rds' || github.event.inputs.app == '') && 'true' || 'false' }}
+      ENABLE_S3_WEBSITE: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'app1-s3-ec2-rds' || github.event.inputs.app == '') && 'true' || 'false' }}
+
     steps:
       # 1) Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2) Configure AWS credentials via OIDC (no long-lived keys)
+      # 2) Configure AWS credentials via OIDC (PROD)
       - name: Configure AWS credentials via OIDC (PROD)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # Use the PROD-specific role here if you have one
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
           role-session-name: github-actions-prod
           aws-region: ${{ env.TF_REGION }}
@@ -91,6 +94,8 @@ jobs:
           echo "Working dir:         ${TF_WORKDIR}"
           echo "Confirm apply (raw): ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
           echo "Git SHA:             $GITHUB_SHA"
+          echo "Enable EC2:          $ENABLE_EC2"
+          echo "Enable S3 Website:   $ENABLE_S3_WEBSITE"
           echo "======================================="
 
       # 4) Install a pinned Terraform version
@@ -115,7 +120,10 @@ jobs:
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}
           TF_VAR_aws_region:  ${{ env.TF_REGION }}
-        run: terraform plan -compact-warnings
+        run: |
+          terraform plan -compact-warnings \
+            -var="enable_ec2=${{ env.ENABLE_EC2 }}" \
+            -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"
 
       # 8) Terraform Apply (REAL CHANGES TO PROD)
       #
@@ -135,4 +143,7 @@ jobs:
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}
           TF_VAR_aws_region:  ${{ env.TF_REGION }}
-        run: terraform apply -auto-approve
+        run: |
+          terraform apply -auto-approve \
+            -var="enable_ec2=${{ env.ENABLE_EC2 }}" \
+            -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"

@@ -1,52 +1,24 @@
-################################
-# Demo / metadata-style outputs #
-################################
-
-output "aws_account_id" {
-  description = "AWS account ID (demo value from variable, not from AWS)"
-  value       = var.aws_account_id
+output "ecs_cluster_id" {
+  description = "ECS Cluster ID"
+  value       = aws_ecs_cluster.app2_cluster.id
 }
 
-output "aws_region" {
-  description = "AWS region (demo value from variable, not from AWS)"
-  value       = var.aws_region
+output "ecs_service_name" {
+  description = "ECS Service Name"
+  value       = aws_ecs_service.app2_service.name
 }
 
-output "iam_user_arn" {
-  description = "IAM user ARN for GitHub Actions (demo value from variable, not from AWS)"
-  value       = var.iam_user_arn
+output "fargate_load_balancer_dns" {
+  description = "Public DNS of Fargate Application Load Balancer"
+  value       = aws_lb.app2_alb.dns_name
 }
 
-output "deployment_id" {
-  description = "Random deployment ID used in this demo"
-  value       = random_string.suffix.result
+output "vpc_id" {
+  description = "VPC ID from module"
+  value       = module.app_stack.vpc_id
 }
 
-output "deployment_timestamp" {
-  description = "Timestamp from the null_resource triggers"
-  value       = null_resource.app2_deployment.triggers.timestamp
-}
-
-output "status" {
-  description = "Human-readable status message for this demo deployment"
-  value       = "✅ Demo deployment simulation completed successfully"
-}
-
-######################################
-# Real infra outputs from app_stack  #
-######################################
-
-output "bucket_name" {
-  description = "App2 S3 bucket name (from app_stack module)"
-  value       = module.app_stack.bucket_name
-}
-
-output "instance_id" {
-  description = "App2 EC2 instance ID (from app_stack module)"
-  value       = module.app_stack.instance_id
-}
-
-output "db_endpoint" {
-  description = "App2 RDS endpoint (from app_stack module)"
-  value       = module.app_stack.db_endpoint
+output "public_subnet_ids" {
+  description = "Public subnet IDs from module"
+  value       = module.app_stack.public_subnet_ids
 }

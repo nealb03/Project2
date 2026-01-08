@@ -31,7 +31,6 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' && format('for {0}', github.event.inputs.app) || '' }}
     runs-on: ubuntu-latest
 
-    # GitHub Environment: use this to scope QA secrets, protections, etc.
     environment: qa
 
     permissions:
@@ -39,10 +38,8 @@ jobs:
       contents: read
 
     env:
-      # Fixed environment for this workflow
       TF_ENV: qa
 
-      # For manual runs, use inputs; for push, use defaults
       TF_APP: >-
         ${{
           github.event_name == 'workflow_dispatch'
@@ -63,6 +60,9 @@ jobs:
         }}
       TF_LOG: INFO
 
+      ENABLE_EC2: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'app1-s3-ec2-rds' || github.event.inputs.app == '') && 'true' || 'false' }}
+      ENABLE_S3_WEBSITE: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'app1-s3-ec2-rds' || github.event.inputs.app == '') && 'true' || 'false' }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -70,7 +70,6 @@ jobs:
       - name: Configure AWS credentials via OIDC (QA)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # Use the QA-specific role here if you have one
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
           role-session-name: github-actions-qa
           aws-region: ${{ env.TF_REGION }}
@@ -86,6 +85,8 @@ jobs:
           echo "Working dir:         ${TF_WORKDIR}"
           echo "Confirm apply (raw): ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
           echo "Git SHA:             $GITHUB_SHA"
+          echo "Enable EC2:          $ENABLE_EC2"
+          echo "Enable S3 Website:   $ENABLE_S3_WEBSITE"
           echo "====================================="
 
       - name: Setup Terraform
@@ -106,7 +107,10 @@ jobs:
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}
           TF_VAR_aws_region:  ${{ env.TF_REGION }}
-        run: terraform plan -compact-warnings
+        run: |
+          terraform plan -compact-warnings \
+            -var="enable_ec2=${{ env.ENABLE_EC2 }}" \
+            -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"
 
       # Apply only when:
       # - manual workflow_dispatch
@@ -121,4 +125,7 @@ jobs:
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}
           TF_VAR_aws_region:  ${{ env.TF_REGION }}
-        run: terraform apply -auto-approve
+        run: |
+          terraform apply -auto-approve \
+            -var="enable_ec2=${{ env.ENABLE_EC2 }}" \
+            -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"

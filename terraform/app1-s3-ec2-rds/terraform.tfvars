@@ -1,5 +1,6 @@
-# Demo Environment Configuration
-environment        = "demo"
-aws_region        = "us-east-1"
-enable_versioning = true
-enable_encryption = true
+aws_region     = "us-east-1"
+my_ip_cidr     = "203.0.113.25/32"
+db_username    = "admin"
+db_password    = "SuperSecretPassword123!"
+key_name       = "keypair-vpc1"
+s3_bucket_name = "nealb03-frontend-bucket-unique-2887"

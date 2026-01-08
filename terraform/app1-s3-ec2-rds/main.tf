@@ -1,96 +1,130 @@
 terraform {
-  required_version = ">= 1.5.0"
-
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.5"
-    }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.2"
-    }
   }
-
-  # Demo-only: keep state local on the runner / machine.
-  backend "local" {}
+  required_version = ">= 1.2.0"
 }
-
-########################
-# AWS Provider (root)  #
-########################
 
 provider "aws" {
   region = var.aws_region
 }
 
-locals {
-  common_tags = {
-    Application = var.app_name
-    Environment = var.environment
-    ManagedBy   = "terraform"
-  }
+variable "aws_region" {
+  type    = string
+  default = "us-east-1"
 }
 
-###########################################
-# Reusable application stack (child module)
-###########################################
+variable "my_ip_cidr" {
+  description = "CIDR block for RDP access"
+  type        = string
+  default     = "0.0.0.0/0"
+}
 
-module "app_stack" {
-  source = "../modules/app_stack"
+##########################################
+# Module: Network (VPC and Subnets setup)
+##########################################
+module "network" {
+  source = "../modules/app_stack/network"
 
-  environment   = var.environment
-  aws_region    = var.aws_region
-  app_name      = var.app_name
-  instance_type = var.instance_type
-  db_engine     = var.db_engine
-  tags          = local.common_tags
+  vpc_cidr          = "10.0.0.0/16"
+  public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+  availability_zones  = ["us-east-1a", "us-east-1b"]
+  enable_nat_gateway  = false
+}
+
+##########################################
+# Module: Security Groups
+##########################################
+module "security_groups" {
+  source = "../modules/app_stack/security_groups"
+
+  vpc_id    = module.network.vpc_id
+  allowed_rdp_cidr = var.my_ip_cidr
+
+  # Allow HTTP 80 open for backend ec2
+  backend_http_port = 80
+  # Allow MySQL access for RDS from any IPv4 (placeholder)
+  rds_access_cidr = "0.0.0.0/0"
+}
+
+##########################################
+# Module: RDS (shared for app1 & app2)
+##########################################
+module "rds" {
+  source = "../modules/app_stack/rds"
+
+  db_identifier          = "cloud495"
+  engine                 = "mysql"
+  engine_version         = "8.0.40"
+  instance_class         = "db.t3.micro"
+  allocated_storage      = 20
+  master_username        = var.db_username
+  master_password        = var.db_password
+  db_name                = "cloud495"
+
+  vpc_id                 = module.network.vpc_id
+  subnet_ids             = module.network.public_subnet_ids
+  vpc_security_group_ids = [module.security_groups.rds_sg_id]
+  publicly_accessible    = true
+
+  multi_az               = false
+}
+
+variable "db_username" {
+  type    = string
+  default = "admin"
+}
+
+variable "db_password" {
+  type    = string
+  sensitive = true
+  default = "password"
+}
+
+##########################################
+# Module: Backend EC2
+##########################################
+module "backend_ec2" {
+  source = "../modules/app_stack/ec2"
+
+  ami_filter_name      = "Windows_Server-2019-English-Full-Base-*"
+  instance_type       = "t3.medium"
+  subnet_id           = module.network.public_subnet_ids[0]
+  vpc_security_group_ids = [module.security_groups.backend_sg_id]
+  key_name            = "keypair-vpc1"
+
+  user_data_script    = file("userdata_windows_backend.ps1")
+  associate_public_ip = true
+}
+
+##########################################
+# Module: Frontend S3 Hosting
+##########################################
+module "frontend_s3" {
+  source = "../modules/app_stack/s3_website"
+
+  bucket_name = "nealb03-frontend-bucket-unique-2887-demo"
+  enable_public_access = true
 }
 
 ############################
-# Random deployment suffix #
+# OUTPUTS
 ############################
 
-resource "random_string" "suffix" {
-  length  = 8
-  special = false
-  upper   = false
+output "backend_public_ip" {
+  description = "Backend EC2 Public IP"
+  value       = module.backend_ec2.public_ip
 }
 
-###################################
-# Demo logging of this deployment #
-###################################
+output "rds_endpoint" {
+  description = "RDS Endpoint"
+  value       = module.rds.endpoint
+}
 
-# This keeps your original "echo" style output so you can show
-# the pipeline and variables without relying only on AWS resources.
-
-resource "null_resource" "app1_deployment" {
-  triggers = {
-    deployment_id = random_string.suffix.result
-    timestamp     = timestamp()
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "=================================================="
-      echo "Terraform Demo Deployment - App1-S3-EC2-RDS (root)"
-      echo "Deployment ID:      ${random_string.suffix.result}"
-      echo "Environment:        ${var.environment}"
-      echo "App Name:           ${var.app_name}"
-      echo "GitHub Repository:  ${var.github_repository}"
-      echo "AWS Account ID:     ${var.aws_account_id}"
-      echo "AWS Region:         ${var.aws_region}"
-      echo "IAM User ARN:       ${var.iam_user_arn}"
-      echo "--------------------------------------------------"
-      echo "Module Outputs:"
-      echo "  S3 Bucket Name:   ${module.app_stack.bucket_name}"
-      echo "  EC2 Instance ID:  ${module.app_stack.instance_id}"
-      echo "  RDS Endpoint:     ${module.app_stack.db_endpoint}"
-      echo "=================================================="
-    EOT
-  }
+output "s3_website_endpoint" {
+  description = "Frontend S3 Website URL"
+  value       = module.frontend_s3.website_endpoint
 }

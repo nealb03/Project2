@@ -1,75 +1,42 @@
-########################################
-# Core environment / app configuration #
-########################################
-
-variable "environment" {
-  description = "Deployment environment name (e.g. sandbox, dev, qa, prod)"
-  type        = string
-  default     = "sandbox"
-}
-
-variable "app_name" {
-  description = "Logical name of the application"
-  type        = string
-  default     = "app2-fargate"
-}
-
 variable "aws_region" {
-  description = "AWS region"
+  description = "AWS region to deploy resources"
   type        = string
   default     = "us-east-1"
 }
 
-########################################
-# Infra tuning for the app_stack module #
-########################################
-
-variable "instance_type" {
-  description = "EC2 instance type used by the app_stack module"
+variable "my_ip_cidr" {
+  description = "CIDR block allowed for RDP (optional)"
   type        = string
-  default     = "t3.micro"
+  default     = "0.0.0.0/0"
 }
 
-variable "db_engine" {
-  description = "Database engine used by the app_stack module"
+variable "db_endpoint" {
+  description = "RDS database endpoint from app1"
   type        = string
-  default     = "postgres"
+  default     = ""
 }
 
-##########################
-# Demo / metadata fields #
-##########################
-
-variable "github_repository" {
-  description = "Full GitHub repository slug (owner/repo) where this Terraform code lives (demo/logging only)"
+variable "db_username" {
+  description = "RDS username"
   type        = string
-  default     = "nealb03/Apps"
+  default     = "admin"
 }
 
-variable "aws_account_id" {
-  description = "AWS account ID (demo string only, not used to call AWS)"
+variable "db_password" {
+  description = "RDS password"
   type        = string
-  default     = "288761763536"
+  sensitive   = true
+  default     = ""
 }
 
-variable "iam_user_arn" {
-  description = "IAM user ARN for GitHub Actions (demo string only, not used to call AWS)"
+variable "container_image" {
+  description = "Docker image URI for Fargate task"
   type        = string
-  default     = "arn:aws:iam::288761763536:user/github-actions-user"
+  default     = "nginx:latest"
 }
 
-##########################################
-# Optional, unused demo feature switches #
-##########################################
-
-variable "enable_encryption" {
-  description = "Demo flag (not used in this sample configuration)"
-  type        = bool
-  default     = false
-}
-
-variable "enable_versioning" {
-  description = "Demo flag (not used in this sample configuration)"
-  type        = bool
-  default     = false
+variable "container_port" {
+  description = "Port exposed by container"
+  type        = number
+  default     = 80
 }

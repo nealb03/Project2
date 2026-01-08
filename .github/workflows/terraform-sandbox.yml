@@ -26,13 +26,11 @@ on:
 
 jobs:
   terraform-deploy-sandbox:
-    # Show app name if workflow_dispatch; otherwise just SANDBOX
     name: >-
       Terraform Deploy SANDBOX
       ${{ github.event_name == 'workflow_dispatch' && format('for {0}', github.event.inputs.app) || '' }}
     runs-on: ubuntu-latest
 
-    # GitHub Environment: use this to scope sandbox secrets, etc.
     environment: sandbox
 
     permissions:
@@ -40,12 +38,8 @@ jobs:
       contents: read
 
     env:
-      # Fixed environment for this workflow
       TF_ENV: sandbox
 
-      # App / region resolution:
-      # - workflow_dispatch: use inputs
-      # - push: default to app1-s3-ec2-rds and us-east-1
       TF_APP: >-
         ${{
           github.event_name == 'workflow_dispatch'
@@ -65,6 +59,10 @@ jobs:
             || 'app1-s3-ec2-rds'
         }}
       TF_LOG: INFO
+
+      # Set enable_ec2 and enable_s3_website depending on app folder
+      ENABLE_EC2: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'app1-s3-ec2-rds' || github.event.inputs.app == '') && 'true' || 'false' }}
+      ENABLE_S3_WEBSITE: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'app1-s3-ec2-rds' || github.event.inputs.app == '') && 'true' || 'false' }}
 
     steps:
       - name: Checkout repository
@@ -88,6 +86,8 @@ jobs:
           echo "Working dir:         ${TF_WORKDIR}"
           echo "Git SHA:             $GITHUB_SHA"
           echo "Confirm apply (raw): ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
+          echo "Enable EC2:          $ENABLE_EC2"
+          echo "Enable S3 Website:   $ENABLE_S3_WEBSITE"
           echo "========================================="
 
       - name: Setup Terraform
@@ -108,11 +108,11 @@ jobs:
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}
           TF_VAR_aws_region:  ${{ env.TF_REGION }}
-        run: terraform plan -compact-warnings
+        run: |
+          terraform plan -compact-warnings \
+            -var="enable_ec2=${{ env.ENABLE_EC2 }}" \
+            -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"
 
-      # Apply only when:
-      # - It is a workflow_dispatch event AND
-      # - confirm_apply == "APPLY"
       - name: Terraform Apply (SANDBOX, requires confirm_apply == "APPLY")
         if: >
           github.event_name == 'workflow_dispatch' &&
@@ -121,4 +121,7 @@ jobs:
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}
           TF_VAR_aws_region:  ${{ env.TF_REGION }}
-        run: terraform apply -auto-approve
+        run: |
+          terraform apply -auto-approve \
+            -var="enable_ec2=${{ env.ENABLE_EC2 }}" \
+            -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"
