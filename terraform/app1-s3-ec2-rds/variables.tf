@@ -1,99 +1,89 @@
+variable "aws_region" {
+  description = "AWS region to deploy resources into."
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "environment" {
+  description = "Environment name (e.g., sandbox, dev, prod)."
+  type        = string
+  default     = "sandbox"
+}
+
+variable "my_ip_cidr" {
+  description = "Your public IP with CIDR suffix for RDP access (e.g. 203.0.113.10/32)."
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+# Feature toggles (these are the ones your GitHub Action passes via -var)
 variable "enable_ec2" {
+  description = "If true, create the backend EC2 instance (and its security group)."
   type        = bool
-  description = "Enable or disable deployment of EC2 instance"
   default     = true
 }
 
 variable "enable_s3_website" {
+  description = "If true, create the S3 static website resources."
   type        = bool
-  description = "Enable or disable deployment of S3 static website"
   default     = true
 }
 
-variable "my_ip_cidr" {
+# RDS settings (so terraform.tfvars values are declared and no longer warn)
+variable "db_name" {
+  description = "Database name for the RDS instance."
   type        = string
-  description = "Your public IP with CIDR suffix for RDP access"
-  default     = "0.0.0.0/0"
-}
-
-variable "db_identifier" {
-  type        = string
-  description = "RDS database identifier"
   default     = "cloud495"
 }
 
-variable "db_master_username" {
+variable "db_username" {
+  description = "Master username for the RDS instance."
   type        = string
-  description = "RDS master username"
   default     = "admin"
 }
 
-variable "db_master_password" {
+variable "db_password" {
+  description = "Master password for the RDS instance."
   type        = string
-  description = "RDS master password"
-  default     = "password"
   sensitive   = true
+  default     = "password"
 }
 
-variable "public_subnet_a_cidr" {
+variable "db_instance_identifier" {
+  description = "Identifier for the RDS instance."
   type        = string
-  description = "CIDR block for public subnet A"
-  default     = "10.0.1.0/24"
+  default     = "cloud495"
 }
 
-variable "public_subnet_b_cidr" {
+# S3 settings (so terraform.tfvars values are declared and no longer warn)
+variable "s3_bucket_name" {
+  description = "Globally-unique S3 bucket name for frontend website."
   type        = string
-  description = "CIDR block for public subnet B"
-  default     = "10.0.2.0/24"
+  default     = "nealb03-frontend-bucket-unique-2887"
 }
 
-variable "aws_region" {
+# EC2 settings
+variable "ec2_instance_type" {
+  description = "Instance type for backend EC2."
   type        = string
-  description = "AWS region"
-  default     = "us-east-1"
-}
-
-variable "instance_type" {
-  type        = string
-  description = "EC2 instance type"
   default     = "t3.medium"
 }
 
-variable "key_name" {
+variable "ec2_key_name" {
+  description = "EC2 key pair name for RDP access."
   type        = string
-  description = "Key pair name for EC2 instance"
   default     = "keypair-vpc1"
 }
 
-variable "ami_filter_name" {
+# Networking / AZs
+variable "az_a" {
+  description = "Availability zone A."
   type        = string
-  description = "AMI filter pattern for Windows Server 2019"
-  default     = "Windows_Server-2019-English-Full-Base-*"
+  default     = "us-east-1a"
 }
 
-variable "associate_public_ip" {
-  type        = bool
-  description = "Whether to assign a public IP to the EC2 instance"
-  default     = true
-}
-
-variable "user_data_script" {
+variable "az_b" {
+  description = "Availability zone B."
   type        = string
-  description = "User data script for EC2 instance initialization"
-  default     = <<-EOD
-    $ErrorActionPreference = "Stop"
-    # Install .NET Framework 4.8
-    $netfxInstaller = "ndp48-x86-x64-allos-enu.exe"
-    $netfxUrl = "https://download.microsoft.com/download/9/5/F/95F98B3F-9F50-4EA0-9A19-3B2AEA4BDEDA/ndp48-x86-x64-allos-enu.exe"
-    Invoke-WebRequest -Uri $netfxUrl -OutFile "C:\\$netfxInstaller"
-    Start-Process -FilePath "C:\\$netfxInstaller" -ArgumentList "/q /norestart" -Wait
-
-    # Install Visual Studio Build Tools 2019
-    $vsInstallerUrl = "https://aka.ms/vs/16/release/vs_buildtools.exe"
-    $vsInstallerPath = "C:\\vs_buildtools.exe"
-    Invoke-WebRequest -Uri $vsInstallerUrl -OutFile $vsInstallerPath
-    Start-Process -FilePath $vsInstallerPath -ArgumentList "--quiet --wait --norestart --nocache --installPath C:\\BuildTools --add Microsoft.VisualStudio.Workload.ManagedDesktopBuildTools" -Wait
-
-    New-NetFirewallRule -DisplayName "HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
-  EOD
+  default     = "us-east-1b"
 }
