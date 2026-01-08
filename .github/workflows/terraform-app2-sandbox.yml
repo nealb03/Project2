@@ -1,0 +1,71 @@
+name: Terraform Deploy - SANDBOX (app2)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/app2-fargate/**"
+      - ".github/workflows/terraform-app2-sandbox.yml"
+
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "plan or apply"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan
+          - apply
+      confirm_apply:
+        description: 'Type "APPLY" to confirm applying changes to SANDBOX'
+        required: false
+        default: "NO"
+
+env:
+  AWS_REGION: us-east-1
+  TF_WORKING_DIR: terraform/app2-fargate
+  TF_VERSION: 1.7.5
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform fmt (check)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false -upgrade
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Terraform apply (manual + confirmed)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply' && github.event.inputs.confirm_apply == 'APPLY'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -input=false -no-color -auto-approve tfplan
