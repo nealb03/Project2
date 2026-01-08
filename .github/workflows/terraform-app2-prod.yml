@@ -1,0 +1,95 @@
+name: Terraform Deploy App2 - PROD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/app2-fargate/**"
+      - ".github/workflows/terraform-app2-prod.yml"
+
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: "AWS region (e.g. us-east-1)"
+        required: true
+        default: "us-east-1"
+      confirm_apply:
+        description: 'Type "APPLY" to run terraform apply in PROD'
+        required: true
+        default: "NO"
+
+jobs:
+  terraform-prod:
+    runs-on: ubuntu-latest
+    environment: prod
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_LOG: INFO
+
+      TF_ENV: prod
+
+      TF_APP: app2-fargate
+      TF_REGION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.aws_region || 'us-east-1' }}
+      TF_WORKDIR: terraform/app2-fargate
+
+      TF_VAR_aws_region: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.aws_region || 'us-east-1' }}
+      TF_VAR_environment: prod
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC (PROD)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
+          role-session-name: github-actions-prod
+          aws-region: ${{ env.TF_REGION }}
+
+      - name: Show deployment context
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Terraform Deploy Context (PROD) ==="
+          echo "Trigger:               ${{ github.event_name }}"
+          echo "Branch/Ref:            $GITHUB_REF"
+          echo "Terraform app:         ${TF_APP}"
+          echo "Environment:           ${TF_ENV}"
+          echo "AWS region:            ${TF_REGION}"
+          echo "Working dir:           ${TF_WORKDIR}"
+          echo "Git SHA:               $GITHUB_SHA"
+          echo "Confirm apply (raw):   ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
+          echo "======================================="
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      - name: Terraform Format (auto-fix)
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform fmt -recursive
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform plan -compact-warnings -input=false -no-color
+
+      - name: Terraform Apply (PROD)
+        if: >
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.confirm_apply == 'APPLY'
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform apply -auto-approve -input=false -no-color
