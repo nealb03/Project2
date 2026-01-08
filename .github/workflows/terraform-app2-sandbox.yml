@@ -2,18 +2,31 @@ name: Terraform Deploy App2 - Sandbox
 
 on:
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
       - "terraform/app2-fargate/**"
       - ".github/workflows/terraform-app2-sandbox.yml"
 
   push:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
       - "terraform/app2-fargate/**"
       - ".github/workflows/terraform-app2-sandbox.yml"
 
   workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan
+          - apply
+      confirm_apply:
+        description: 'Type "APPLY" to confirm applying changes to the SANDBOX account'
+        required: false
+        default: ""
 
 env:
   TF_VERSION: "1.7.5"
@@ -56,4 +69,12 @@ jobs:
 
       - name: Terraform plan
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform plan -no-color
+        run: terraform plan -no-color -out=tfplan
+
+      - name: Terraform apply (manual only)
+        if: >
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.action == 'apply' &&
+          github.event.inputs.confirm_apply == 'APPLY'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -no-color -auto-approve tfplan
