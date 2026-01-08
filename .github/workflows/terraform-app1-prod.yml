@@ -1,4 +1,4 @@
-name: Terraform Deploy - PROD
+name: Terraform Deploy App1 - PROD
 
 on:
   # Auto-run planning on Terraform changes from main only (no auto-apply)
@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths:
       - "terraform/**"
-      - "\.github/workflows/terraform-app1-prod\.yml"
+      - ".github/workflows/terraform-app1-prod.yml"
 
   # Manual trigger: used for real Terraform changes in PROD
   workflow_dispatch:

@@ -1,4 +1,4 @@
-name: Terraform Deploy - SANDBOX
+name: Terraform Deploy App1 - SANDBOX
 
 on:
   push:

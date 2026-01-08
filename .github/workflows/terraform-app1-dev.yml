@@ -1,11 +1,11 @@
-name: Terraform Deploy - DEV
+name: Terraform Deploy App1 - DEV
 
 on:
   push:
     branches: [main]
     paths:
       - "terraform/**"
-      - "\.github/workflows/terraform-app1-dev\.yml"
+      - ".github/workflows/terraform-app1-dev.yml"
 
   workflow_dispatch:
     inputs:
