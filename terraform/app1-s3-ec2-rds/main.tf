@@ -70,6 +70,7 @@ resource "aws_route_table_association" "public_subnet_b_association" {
 ############################
 
 resource "aws_security_group" "backend_sg" {
+  count       = var.enable_ec2 ? 1 : 0
   name        = "backend-sg"
   description = "Security group for backend EC2 instance"
   vpc_id      = aws_vpc.main.id
@@ -153,6 +154,7 @@ resource "aws_db_instance" "cloud495" {
 ############################
 
 data "aws_ami" "windows_server" {
+  count       = var.enable_ec2 ? 1 : 0
   most_recent = true
   owners      = ["amazon"]
 
@@ -163,12 +165,13 @@ data "aws_ami" "windows_server" {
 }
 
 resource "aws_instance" "backend" {
-  ami                         = data.aws_ami.windows_server.id
-  instance_type               = "t3.medium"
-  subnet_id                   = aws_subnet.public_subnet_a.id
-  vpc_security_group_ids      = [aws_security_group.backend_sg.id]
+  count                      = var.enable_ec2 ? 1 : 0
+  ami                        = data.aws_ami.windows_server[0].id
+  instance_type              = "t3.medium"
+  subnet_id                  = aws_subnet.public_subnet_a.id
+  vpc_security_group_ids     = [aws_security_group.backend_sg[0].id]
   associate_public_ip_address = true
-  key_name                    = "keypair-vpc1"
+  key_name                   = "keypair-vpc1"
 
   user_data = <<-EOF
     $ErrorActionPreference = "Stop"
@@ -195,13 +198,15 @@ resource "aws_instance" "backend" {
 ############################
 
 resource "aws_s3_bucket" "frontend_bucket" {
+  count         = var.enable_s3_website ? 1 : 0
   bucket        = "nealb03-frontend-bucket-unique-2887"
   force_destroy = true
   tags          = { Name = "frontend-bucket" }
 }
 
 resource "aws_s3_bucket_public_access_block" "frontend_pab" {
-  bucket                  = aws_s3_bucket.frontend_bucket.id
+  count                  = var.enable_s3_website ? 1 : 0
+  bucket                  = aws_s3_bucket.frontend_bucket[0].id
   block_public_acls       = false
   block_public_policy     = false
   ignore_public_acls      = false
@@ -209,7 +214,8 @@ resource "aws_s3_bucket_public_access_block" "frontend_pab" {
 }
 
 resource "aws_s3_bucket_policy" "frontend_bucket_policy" {
-  bucket = aws_s3_bucket.frontend_bucket.id
+  count  = var.enable_s3_website ? 1 : 0
+  bucket = aws_s3_bucket.frontend_bucket[0].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -218,14 +224,15 @@ resource "aws_s3_bucket_policy" "frontend_bucket_policy" {
         Effect    = "Allow",
         Principal = "*",
         Action    = "s3:GetObject",
-        Resource  = "${aws_s3_bucket.frontend_bucket.arn}/*"
+        Resource  = "${aws_s3_bucket.frontend_bucket[0].arn}/*"
       }
     ]
   })
 }
 
 resource "aws_s3_bucket_website_configuration" "frontend_website" {
-  bucket = aws_s3_bucket.frontend_bucket.id
+  count  = var.enable_s3_website ? 1 : 0
+  bucket = aws_s3_bucket.frontend_bucket[0].id
 
   index_document { suffix = "index.html" }
   error_document { key = "error.html" }
