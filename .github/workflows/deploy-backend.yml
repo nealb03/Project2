@@ -6,11 +6,19 @@ on:
       - main
       - terraform-modules
     paths:
-      # Trigger when anything in the backend changes
       - 'App2-Fargate/Backend/**'
-      # Or when this workflow file changes
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Set to true to apply deployment'
+        required: false
+        default: 'false'
+
+env:
+  AWS_REGION: us-east-1
+  ECS_CLUSTER: brentaneal-cluster
+  BACKEND_SERVICE: brentaneal-backend-service
 
 jobs:
   build-and-deploy-backend:
@@ -26,7 +34,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Build backend
         working-directory: App2-Fargate/Backend
@@ -38,7 +46,8 @@ jobs:
           # mvn clean package
           # dotnet build
 
-      - name: Deploy backend
+      - name: Deploy backend (Conditional Apply)
+        if: github.event.inputs.apply == 'true'
         working-directory: App2-Fargate/Backend
         run: |
           echo "Deploying App2 Fargate backend..."
@@ -46,8 +55,8 @@ jobs:
 
           # For ECS:
           # aws ecs update-service \
-          #   --cluster your-cluster \
-          #   --service your-backend-service \
+          #   --cluster ${{ env.ECS_CLUSTER }} \
+          #   --service ${{ env.BACKEND_SERVICE }} \
           #   --force-new-deployment
 
           # For Lambda:
