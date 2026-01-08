@@ -1,5 +1,5 @@
 output "backend_public_ip" {
-  description = "Public IP of backend EC2 instance"
+  description = "EC2 backend public IP"
   value       = module.app_stack.backend_public_ip
 }
 

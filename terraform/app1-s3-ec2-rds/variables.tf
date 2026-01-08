@@ -4,41 +4,41 @@ variable "environment" {
 }
 
 variable "aws_region" {
-  description = "AWS region to deploy resources"
+  description = "AWS region for deployment"
   type        = string
   default     = "us-east-1"
 }
 
 variable "enable_ec2" {
-  description = "Whether to create EC2 instances (true/false)"
+  description = "Create EC2 resources"
   type        = bool
   default     = true
 }
 
 variable "enable_s3_website" {
-  description = "Whether to create S3 website bucket (true/false)"
+  description = "Create S3 website bucket"
   type        = bool
   default     = true
 }
 
 variable "db_username" {
-  description = "Database master username"
+  description = "RDS DB username"
   type        = string
 }
 
 variable "db_password" {
-  description = "Database master password"
+  description = "RDS DB password"
   type        = string
   sensitive   = true
 }
 
 variable "s3_bucket_name" {
-  description = "Name of the S3 bucket"
+  description = "S3 bucket name for website"
   type        = string
 }
 
 variable "key_name" {
-  description = "EC2 key pair name"
+  description = "Name of EC2 key pair"
   type        = string
 }
 
