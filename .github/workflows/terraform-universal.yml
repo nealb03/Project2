@@ -42,7 +42,8 @@ jobs:
   terraform:
     runs-on: ubuntu-latest
 
-    # Uses GitHub Environments so the same workflow can use different secrets per env
+    # Optional but recommended: ties this run to GitHub Environment
+    # (you can add approvals for prod/qa if you want)
     environment: ${{ inputs.environment }}
 
     permissions:
@@ -58,7 +59,7 @@ jobs:
       TF_REGION: ${{ inputs.aws_region }}
       TF_WORKDIR: terraform/${{ inputs.app }}
 
-      # Common Terraform variables (only helpful if your TF code defines them)
+      # Common Terraform variables (only used if your TF code defines them)
       TF_VAR_environment: ${{ inputs.environment }}
       TF_VAR_aws_region: ${{ inputs.aws_region }}
 
@@ -66,12 +67,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials via OIDC
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # Put this secret in each GitHub Environment: sandbox/dev/qa/prod
-          # Example: arn:aws:iam::<acct>:role/GithubActionsRole
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
           role-session-name: github-actions-${{ inputs.environment }}
           aws-region: ${{ env.TF_REGION }}
 
