@@ -1,48 +1,41 @@
-variable "environment" {
-  description = "Deployment environment name"
-  type        = string
-}
-
 variable "aws_region" {
-  description = "AWS region for deployment"
+  description = "AWS deployment region"
   type        = string
   default     = "us-east-1"
 }
 
 variable "enable_ec2" {
-  description = "Create EC2 resources"
   type        = bool
   default     = true
 }
 
 variable "enable_s3_website" {
-  description = "Create S3 website bucket"
   type        = bool
   default     = true
 }
 
-variable "db_username" {
-  description = "RDS DB username"
+variable "db_master_username" {
+  description = "RDS master username"
   type        = string
 }
 
-variable "db_password" {
-  description = "RDS DB password"
+variable "db_master_password" {
+  description = "RDS master password"
   type        = string
   sensitive   = true
 }
 
 variable "s3_bucket_name" {
-  description = "S3 bucket name for website"
+  description = "S3 bucket name"
   type        = string
 }
 
 variable "key_name" {
-  description = "Name of EC2 key pair"
+  description = "EC2 key pair name"
   type        = string
 }
 
 variable "my_ip_cidr" {
-  description = "Your IP CIDR for security group ingress"
+  description = "My public IP CIDR for access"
   type        = string
 }

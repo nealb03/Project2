@@ -6,20 +6,19 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Call consolidated app_stack module only once
 module "app_stack" {
   source = "../modules/app_stack"
 
-  environment       = var.environment
-  aws_region        = var.aws_region
+  # Pass only the variables that app_stack module defines:
   enable_ec2        = var.enable_ec2
   enable_s3_website = var.enable_s3_website
 
-  db_username       = var.db_username
-  db_password       = var.db_password
-  s3_bucket_name    = var.s3_bucket_name
-  key_name          = var.key_name
-  my_ip_cidr        = var.my_ip_cidr
+  db_master_username = var.db_master_username
+  db_master_password = var.db_master_password
 
-  # Add any other required variables your module expects
+  # Add other variables matching exactly your app_stack module variable names:
+
+  s3_bucket_name = var.s3_bucket_name
+  key_name       = var.key_name
+  my_ip_cidr     = var.my_ip_cidr
 }
