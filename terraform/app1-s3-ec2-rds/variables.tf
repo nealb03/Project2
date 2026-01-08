@@ -5,11 +5,13 @@ variable "aws_region" {
 }
 
 variable "enable_ec2" {
+  description = "Whether to create EC2 resources"
   type        = bool
   default     = true
 }
 
 variable "enable_s3_website" {
+  description = "Whether to create an S3 website bucket"
   type        = bool
   default     = true
 }
@@ -26,7 +28,7 @@ variable "db_master_password" {
 }
 
 variable "s3_bucket_name" {
-  description = "S3 bucket name"
+  description = "Name of the S3 bucket"
   type        = string
 }
 
@@ -36,6 +38,6 @@ variable "key_name" {
 }
 
 variable "my_ip_cidr" {
-  description = "My public IP CIDR for access"
+  description = "IP CIDR for security group ingress"
   type        = string
 }

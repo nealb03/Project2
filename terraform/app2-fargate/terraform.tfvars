@@ -13,4 +13,4 @@ enable_s3_website    = false
 # RDS connection variables (if RDS is used, set endpoint & credentials accordingly)
 db_endpoint          = "your-rds-endpoint"       # e.g., from app1 outputs or manually set
 db_username          = "admin"                   # Override with your DB username
-db_password          = "your-db-password"        # Place secrets securely; do NOT commit plaintext passwords
+db_password          = "password"        # Place secrets securely; do NOT commit plaintext passwords
