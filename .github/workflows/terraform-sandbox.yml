@@ -49,18 +49,13 @@ jobs:
       TF_REGION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.aws_region || 'us-east-1' }}
       TF_WORKDIR: terraform/${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app || 'app1-s3-ec2-rds' }}
 
-      # Feature toggles default behavior:
-      # - push to main: keep enabled
-      # - workflow_dispatch: use input values
       ENABLE_EC2: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.enable_ec2 || 'true' }}
       ENABLE_S3_WEBSITE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.enable_s3_website || 'true' }}
 
-      # Fixed AMI to avoid ec2:DescribeImages permission
-      TF_VAR_windows_ami_id: "ami-0f6d3d1de3c02ee19"
-
-      # Pass region/environment into Terraform variables (provider + tagging)
       TF_VAR_aws_region: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.aws_region || 'us-east-1' }}
       TF_VAR_environment: sandbox
+
+      TF_VAR_windows_ami_id: "ami-0f6d3d1de3c02ee19"
 
     steps:
       - name: Checkout
@@ -82,16 +77,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Trigger:              ${{ github.event_name }}"
-          echo "Ref:                  $GITHUB_REF"
-          echo "TF_WORKDIR:           ${TF_WORKDIR}"
-          echo "TF_ENV:               ${TF_ENV}"
-          echo "TF_REGION:            ${TF_REGION}"
-          echo "ENABLE_EC2:           ${ENABLE_EC2}"
-          echo "ENABLE_S3_WEBSITE:    ${ENABLE_S3_WEBSITE}"
-          echo "TF_VAR_windows_ami_id:${TF_VAR_windows_ami_id}"
+          echo "Trigger:               ${{ github.event_name }}"
+          echo "Ref:                   $GITHUB_REF"
+          echo "TF_WORKDIR:            ${TF_WORKDIR}"
+          echo "TF_ENV:                ${TF_ENV}"
+          echo "TF_REGION:             ${TF_REGION}"
+          echo "ENABLE_EC2:            ${ENABLE_EC2}"
+          echo "ENABLE_S3_WEBSITE:     ${ENABLE_S3_WEBSITE}"
+          echo "TF_VAR_windows_ami_id: ${TF_VAR_windows_ami_id}"
 
-      # Recommended: auto-fix formatting so CI doesn't fail on fmt
       - name: Terraform Format (auto-fix)
         working-directory: ${{ env.TF_WORKDIR }}
         run: terraform fmt -recursive

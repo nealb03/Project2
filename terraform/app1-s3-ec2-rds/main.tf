@@ -1,13 +1,20 @@
 locals {
+  # Convert empty strings to null so coalesce() can skip them
+  db_username_candidate        = var.db_username != "" ? var.db_username : null
+  db_master_username_candidate = var.db_master_username != "" ? var.db_master_username : null
+
+  db_password_candidate        = var.db_password != "" ? var.db_password : null
+  db_master_password_candidate = var.db_master_password != "" ? var.db_master_password : null
+
   effective_db_username = coalesce(
-    nullif(var.db_username, ""),
-    nullif(var.db_master_username, ""),
-    "admin",
+    local.db_username_candidate,
+    local.db_master_username_candidate,
+    "cloud-495",
   )
 
   effective_db_password = coalesce(
-    nullif(var.db_password, ""),
-    nullif(var.db_master_password, ""),
+    local.db_password_candidate,
+    local.db_master_password_candidate,
     "password",
   )
 }

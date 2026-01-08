@@ -16,7 +16,6 @@ variable "my_ip_cidr" {
   default     = "0.0.0.0/0"
 }
 
-# Feature toggles (used by GitHub Actions -var flags)
 variable "enable_ec2" {
   description = "If true, create backend EC2 resources."
   type        = bool
@@ -29,9 +28,8 @@ variable "enable_s3_website" {
   default     = true
 }
 
-# AMI ID (avoids DescribeImages permission requirement)
 variable "windows_ami_id" {
-  description = "Windows Server AMI ID used for the backend instance."
+  description = "Windows Server AMI ID used for the backend instance (avoids DescribeImages)."
   type        = string
   default     = "ami-0f6d3d1de3c02ee19"
 }
@@ -48,7 +46,6 @@ variable "ec2_key_name" {
   default     = "keypair-vpc1"
 }
 
-# RDS settings
 variable "db_instance_identifier" {
   description = "Identifier for the RDS instance."
   type        = string
@@ -61,7 +58,6 @@ variable "db_name" {
   default     = "cloud495"
 }
 
-# Preferred naming
 variable "db_username" {
   description = "RDS master username (preferred key)."
   type        = string
@@ -75,7 +71,6 @@ variable "db_password" {
   default     = ""
 }
 
-# Legacy naming (matches your warnings)
 variable "db_master_username" {
   description = "RDS master username (legacy tfvars key)."
   type        = string
@@ -89,14 +84,12 @@ variable "db_master_password" {
   default     = ""
 }
 
-# S3
 variable "s3_bucket_name" {
-  description = "Globally unique S3 bucket name for frontend website."
+  description = "Globally unique S3 bucket name for frontend static website."
   type        = string
   default     = "nealb03-frontend-bucket-unique-2887"
 }
 
-# AZs
 variable "az_a" {
   description = "Availability zone A."
   type        = string

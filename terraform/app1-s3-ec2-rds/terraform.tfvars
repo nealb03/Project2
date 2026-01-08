@@ -13,7 +13,7 @@ ec2_instance_type = "t3.medium"
 db_instance_identifier = "cloud495"
 db_name                = "cloud495"
 
-db_master_username = "admin"
+db_master_username = "cloud-495"
 db_master_password = "password"
 
 s3_bucket_name = "nealb03-frontend-bucket-unique-2887"
