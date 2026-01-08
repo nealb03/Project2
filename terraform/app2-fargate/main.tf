@@ -166,7 +166,7 @@ resource "aws_ecs_cluster" "cluster" {
 ############################
 
 resource "aws_ecs_task_definition" "task" {
-  family                   = var.ecs_task_family
+  family = var.ecs_task_family
 
   # These are strings in the ECS API. Our variables are numbers, so convert safely.
   cpu    = tostring(var.ecs_task_cpu)
