@@ -8,7 +8,7 @@ on:
     paths:
       - 'terraform/**'
 
-  # Manual trigger for ad‑hoc runs / different apps/regions
+  # Manual trigger for ad-hoc runs / different apps/regions
   workflow_dispatch:
     inputs:
       app:
@@ -60,9 +60,9 @@ jobs:
         }}
       TF_LOG: INFO
 
-      # Set enable_ec2 and enable_s3_website depending on app folder
-      ENABLE_EC2: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'app1-s3-ec2-rds' || github.event.inputs.app == '') && 'true' || 'false' }}
-      ENABLE_S3_WEBSITE: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'app1-s3-ec2-rds' || github.event.inputs.app == '') && 'true' || 'false' }}
+      # Enable EC2 and S3 ONLY for app1-s3-ec2-rds; false for others like app2-fargate
+      ENABLE_EC2: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.app == 'app1-s3-ec2-rds') || (!github.event_name == 'workflow_dispatch' && 'true') && 'true' || 'false' }}
+      ENABLE_S3_WEBSITE: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.app == 'app1-s3-ec2-rds') || (!github.event_name == 'workflow_dispatch' && 'true') && 'true' || 'false' }}
 
     steps:
       - name: Checkout repository

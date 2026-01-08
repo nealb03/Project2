@@ -12,216 +12,207 @@ provider "aws" {
   region = var.aws_region
 }
 
-variable "aws_region" {
-  type    = string
-  default = "us-east-1"
+############################
+# VPC and Networking
+############################
+
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = { Name = "fargate-vpc" }
 }
 
-variable "my_ip_cidr" {
-  description = "Your IP CIDR for allowed RDP (can remain for security group setting)"
-  type        = string
-  default     = "0.0.0.0/0"
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+
+  tags = { Name = "fargate-igw" }
 }
 
-variable "db_endpoint" {
-  description = "RDS database endpoint shared from app1"
-  type        = string
-  default     = ""
+resource "aws_subnet" "public" {
+  count                   = length(var.public_subnet_cidrs)
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidrs[count.index]
+  map_public_ip_on_launch = true
+  availability_zone       = var.availability_zones[count.index]
+
+  tags = { Name = "public-subnet-${count.index + 1}" }
 }
 
-variable "db_username" {
-  description = "RDS database username"
-  type        = string
-  default     = "admin"
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.main.id
+
+  tags = { Name = "public-route-table" }
 }
 
-variable "db_password" {
-  description = "RDS database password"
-  type        = string
-  sensitive   = true
-  default     = ""
+resource "aws_route" "internet_access" {
+  route_table_id         = aws_route_table.public_rt.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.igw.id
 }
 
-variable "container_image" {
-  description = "Docker container image URI for the Fargate task"
-  type        = string
-  default     = "nginx:latest"
+resource "aws_route_table_association" "pub_subnet_assoc" {
+  count          = length(aws_subnet.public)
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public_rt.id
 }
 
-variable "container_port" {
-  description = "Port exposed by the container"
-  type        = number
-  default     = 80
-}
+############################
+# Security Group for ECS Tasks
+############################
 
-##############################
-# Network and RDS module call
-##############################
-module "app_stack" {
-  source              = "../terraform/modules/app_stack"
-
-  vpc_cidr            = "10.0.0.0/16"
-  public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
-  availability_zones  = ["us-east-1a", "us-east-1b"]
-
-  allowed_http_port = var.container_port
-  allowed_rdp_cidr   = var.my_ip_cidr
-  rds_access_cidr   = "0.0.0.0/0"
-
-  manage_rds        = false
-}
-
-##############################
-# ECS Cluster
-##############################
-resource "aws_ecs_cluster" "app2_cluster" {
-  name = "app2-fargate-cluster"
-}
-
-##############################
-# IAM Role for ECS Task Execution
-##############################
-resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "app2-ecs-task-execution-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "ecs-tasks.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_task_execution_attach" {
-  role       = aws_iam_role.ecs_task_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-##############################
-# ECS Task Definition
-##############################
-resource "aws_ecs_task_definition" "app2_task" {
-  family                   = "app2-task"
-  cpu                      = "256"
-  memory                   = "512"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-
-  container_definitions = jsonencode([
-    {
-      name      = "app2-container"
-      image     = var.container_image
-      cpu       = 256
-      memory    = 512
-      essential = true
-
-      portMappings = [
-        {
-          containerPort = var.container_port
-          protocol      = "tcp"
-        }
-      ]
-
-      environment = [
-        { name = "DB_ENDPOINT", value = var.db_endpoint },
-        { name = "DB_USERNAME", value = var.db_username },
-        { name = "DB_PASSWORD", value = var.db_password }
-      ]
-    }
-  ])
-}
-
-##############################
-# Security Group for ALB
-##############################
-resource "aws_security_group" "alb_sg" {
-  name        = "app2-alb-sg"
-  description = "Allow inbound HTTP to ALB"
-  vpc_id      = module.app_stack.vpc_id
+resource "aws_security_group" "ecs_sg" {
+  name        = "ecs-tasks-sg"
+  description = "Allow HTTP inbound to Fargate tasks"
+  vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "Allow HTTP"
-    from_port   = var.container_port
-    to_port     = var.container_port
+    from_port   = var.allowed_http_port
+    to_port     = var.allowed_http_port
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
-    description = "Allow all outbound"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = { Name = "ecs-tasks-sg" }
 }
 
-##############################
-# Application Load Balancer
-##############################
-resource "aws_lb" "app2_alb" {
-  name               = "app2-alb"
-  internal           = false
-  load_balancer_type = "application"
-  subnets            = module.app_stack.public_subnet_ids
-  security_groups    = [aws_security_group.alb_sg.id]
-}
+############################
+# RDS Security Group
+############################
 
-resource "aws_lb_target_group" "app2_tg" {
-  name     = "app2-tg"
-  port     = var.container_port
-  protocol = "HTTP"
-  vpc_id   = module.app_stack.vpc_id
+resource "aws_security_group" "rds_sg" {
+  name        = "rds-sg"
+  description = "SG for RDS"
+  vpc_id      = aws_vpc.main.id
 
-  health_check {
-    interval            = 30
-    path                = "/"
-    protocol            = "HTTP"
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
+  ingress {
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip_cidr]
   }
-}
 
-resource "aws_lb_listener" "app2_listener" {
-  load_balancer_arn = aws_lb.app2_alb.arn
-  port              = var.container_port
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.app2_tg.arn
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = { Name = "rds-sg" }
 }
 
-##############################
-# ECS Service with ALB integration
-##############################
-resource "aws_ecs_service" "app2_service" {
-  name            = "app2-fargate-service"
-  cluster         = aws_ecs_cluster.app2_cluster.id
-  task_definition = aws_ecs_task_definition.app2_task.arn
-  desired_count   = 1
+############################
+# RDS subnet group
+############################
+
+resource "aws_db_subnet_group" "db_subnet_group" {
+  name       = "${var.db_identifier}-subnet-group"
+  subnet_ids = aws_subnet.public.*.id
+
+  tags = { Name = "${var.db_identifier}-subnet-group" }
+}
+
+############################
+# RDS Instance
+############################
+
+resource "aws_db_instance" "db" {
+  identifier             = var.db_identifier
+  engine                 = var.db_engine
+  engine_version         = var.db_engine_version
+  instance_class         = var.db_instance_class
+  allocated_storage      = var.db_allocated_storage
+  username               = var.db_master_username
+  password               = var.db_master_password
+  db_name                = var.db_name
+  publicly_accessible    = false
+  skip_final_snapshot    = true
+  vpc_security_group_ids = [aws_security_group.rds_sg.id]
+  db_subnet_group_name   = aws_db_subnet_group.db_subnet_group.name
+  multi_az               = false
+
+  tags = { Name = var.db_identifier }
+}
+
+############################
+# ECS Cluster
+############################
+
+resource "aws_ecs_cluster" "cluster" {
+  name = "fargate-cluster"
+}
+
+############################
+# ECS Task Definition
+
+############################
+
+resource "aws_ecs_task_definition" "task" {
+  family                   = var.ecs_task_family
+  cpu                      = var.ecs_task_cpu
+  memory                   = var.ecs_task_memory
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  execution_role_arn       = var.ecs_execution_role_arn
+  task_role_arn            = var.ecs_task_role_arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "app2-container"
+      image     = var.container_image
+      portMappings = [
+        {
+          containerPort = var.allowed_http_port
+          protocol      = "tcp"
+        }
+      ]
+      environment = [
+        {
+          name  = "DB_HOST"
+          value = aws_db_instance.db.endpoint
+        },
+        {
+          name  = "DB_USER"
+          value = var.db_master_username
+        },
+        {
+          name  = "DB_PASS"
+          value = var.db_master_password
+        },
+        {
+          name  = "DB_NAME"
+          value = var.db_name
+        }
+      ]
+    }
+  ])
+}
+
+############################
+# ECS Service
+############################
+
+resource "aws_ecs_service" "service" {
+  name            = "fargate-service"
+  cluster         = aws_ecs_cluster.cluster.id
+  task_definition = aws_ecs_task_definition.task.arn
+  desired_count   = var.ecs_desired_count
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets         = module.app_stack.public_subnet_ids
-    security_groups = [module.app_stack.backend_sg_id]
+    subnets         = aws_subnet.public.*.id
+    security_groups = [aws_security_group.ecs_sg.id]
     assign_public_ip = true
   }
 
-  load_balancer {
-    target_group_arn = aws_lb_target_group.app2_tg.arn
-    container_name   = "app2-container"
-    container_port   = var.container_port
-  }
-
-  depends_on = [aws_lb_listener.app2_listener]
+  depends_on = [aws_db_instance.db]
 }

@@ -1,14 +1,14 @@
 name: Terraform Deploy - DEV
 
 on:
-  # Auto-run planning on Terraform changes from main only (no auto-apply)
+  # Auto-run planning on Terraform changes from main only
   push:
     branches:
       - main
     paths:
       - 'terraform/**'
 
-  # Manual trigger: used for real Terraform changes in DEV
+  # Manual trigger for ad-hoc runs / different apps/regions
   workflow_dispatch:
     inputs:
       app:
@@ -20,7 +20,7 @@ on:
         required: true
         default: 'us-east-1'
       confirm_apply:
-        description: 'Type "APPLY" to confirm you understand this will change real infrastructure in DEV'
+        description: 'Type "APPLY" to confirm you want to run terraform apply in DEV'
         required: true
         default: 'NO'
 
@@ -60,9 +60,9 @@ jobs:
         }}
       TF_LOG: INFO
 
-      # Set enable_ec2 and enable_s3_website depending on the app
-      ENABLE_EC2: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'app1-s3-ec2-rds' || github.event.inputs.app == '') && 'true' || 'false' }}
-      ENABLE_S3_WEBSITE: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'app1-s3-ec2-rds' || github.event.inputs.app == '') && 'true' || 'false' }}
+      # Enable EC2 and S3 only for app1-s3-ec2-rds
+      ENABLE_EC2: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.app == 'app1-s3-ec2-rds') || (!github.event_name == 'workflow_dispatch' && 'true') && 'true' || 'false' }}
+      ENABLE_S3_WEBSITE: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.app == 'app1-s3-ec2-rds') || (!github.event_name == 'workflow_dispatch' && 'true') && 'true' || 'false' }}
 
     steps:
       - name: Checkout repository
@@ -84,11 +84,11 @@ jobs:
           echo "Environment:         ${TF_ENV}"
           echo "AWS region:          ${TF_REGION}"
           echo "Working dir:         ${TF_WORKDIR}"
-          echo "Confirm apply (raw): ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
           echo "Git SHA:             $GITHUB_SHA"
+          echo "Confirm apply (raw): ${{ github.event.inputs.confirm_apply || 'N/A (push event)' }}"
           echo "Enable EC2:          $ENABLE_EC2"
           echo "Enable S3 Website:   $ENABLE_S3_WEBSITE"
-          echo "======================================"
+          echo "========================================="
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -108,21 +108,20 @@ jobs:
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}
           TF_VAR_aws_region:  ${{ env.TF_REGION }}
-        run: >
-          terraform plan -compact-warnings
-          -var="enable_ec2=${{ env.ENABLE_EC2 }}"
-          -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"
+        run: |
+          terraform plan -compact-warnings \
+            -var="enable_ec2=${{ env.ENABLE_EC2 }}" \
+            -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"
 
-      - name: Terraform Apply (DEV, requires confirm_apply == "APPLY" on main)
+      - name: Terraform Apply (DEV, requires confirm_apply == "APPLY")
         if: >
           github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/main' &&
           github.event.inputs.confirm_apply == 'APPLY'
         working-directory: ${{ env.TF_WORKDIR }}
         env:
           TF_VAR_environment: ${{ env.TF_ENV }}
           TF_VAR_aws_region:  ${{ env.TF_REGION }}
-        run: >
-          terraform apply -auto-approve
-          -var="enable_ec2=${{ env.ENABLE_EC2 }}"
-          -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"
+        run: |
+          terraform apply -auto-approve \
+            -var="enable_ec2=${{ env.ENABLE_EC2 }}" \
+            -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"
