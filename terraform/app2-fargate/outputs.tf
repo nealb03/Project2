@@ -1,39 +1,49 @@
-output "ecs_cluster_id" {
-  value       = aws_ecs_cluster.cluster.id
-  description = "ECS Cluster ID"
+output "aws_region" {
+  description = "AWS region used for this deployment"
+  value       = var.aws_region
 }
 
-output "ecs_cluster_name" {
-  value       = aws_ecs_cluster.cluster.name
-  description = "ECS Cluster name"
+output "vpc_id" {
+  description = "VPC ID"
+  value       = aws_vpc.main.id
+}
+
+output "public_subnet_ids" {
+  description = "Public subnet IDs"
+  value       = aws_subnet.public[*].id
+}
+
+output "ecs_cluster_id" {
+  description = "ECS cluster ID"
+  value       = aws_ecs_cluster.cluster.id
 }
 
 output "ecs_service_name" {
+  description = "ECS service name"
   value       = aws_ecs_service.service.name
-  description = "ECS Fargate Service name"
 }
 
-output "ecs_service_arn" {
-  value       = aws_ecs_service.service.arn
-  description = "ECS Fargate Service ARN"
+output "ecs_service_id" {
+  description = "ECS service ID (provider-supported identifier)"
+  value       = aws_ecs_service.service.id
 }
 
-output "rds_address" {
-  value       = aws_db_instance.db.address
-  description = "RDS hostname (no port). Use this for DB_HOST in applications."
-}
-
-output "rds_port" {
-  value       = aws_db_instance.db.port
-  description = "RDS port"
+output "ecs_task_definition_arn" {
+  description = "Task definition ARN"
+  value       = aws_ecs_task_definition.task.arn
 }
 
 output "rds_endpoint" {
-  value       = aws_db_instance.db.endpoint
-  description = "RDS endpoint in host:port format (useful for CLI tools)"
+  description = "RDS endpoint address"
+  value       = aws_db_instance.db.address
 }
 
-output "rds_db_name" {
-  value       = aws_db_instance.db.db_name
-  description = "Database name created in RDS"
+output "rds_port" {
+  description = "RDS port"
+  value       = aws_db_instance.db.port
+}
+
+output "rds_identifier" {
+  description = "RDS instance identifier"
+  value       = aws_db_instance.db.id
 }
