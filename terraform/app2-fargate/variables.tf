@@ -37,13 +37,13 @@ variable "public_subnet_cidrs" {
 }
 
 variable "availability_zones" {
-  description = "List of availability zones used to create subnets. Must match the number of public_subnet_cidrs."
+  description = "List of availability zones used to create subnets. Must align 1:1 with public_subnet_cidrs (validated in main.tf)."
   type        = list(string)
   default     = ["us-east-1a", "us-east-1b"]
 
   validation {
-    condition     = length(var.availability_zones) == length(var.public_subnet_cidrs)
-    error_message = "availability_zones must be the same length as public_subnet_cidrs."
+    condition     = length(var.availability_zones) >= 1
+    error_message = "availability_zones must contain at least one availability zone."
   }
 }
 
@@ -93,7 +93,7 @@ variable "db_allocated_storage" {
 
   validation {
     condition     = var.db_allocated_storage >= 20
-    error_message = "db_allocated_storage should be at least 20GB for a typical MySQL demo."
+    error_message = "db_allocated_storage must be at least 20."
   }
 }
 
@@ -108,7 +108,7 @@ variable "db_master_username" {
 }
 
 variable "db_master_password" {
-  description = "Master password for the RDS instance (demo). Do not use a real password in demo code."
+  description = "Master password for the RDS instance (demo)"
   type        = string
   sensitive   = true
 
@@ -119,7 +119,7 @@ variable "db_master_password" {
 }
 
 variable "db_name" {
-  description = "Initial database name to create"
+  description = "Initial database name"
   type        = string
   default     = "app2db"
 }
@@ -135,7 +135,7 @@ variable "ecs_task_family" {
 }
 
 variable "ecs_task_cpu" {
-  description = "Fargate task CPU units (valid examples: 256, 512, 1024, 2048, 4096)"
+  description = "Fargate task CPU units"
   type        = number
   default     = 256
 
@@ -146,7 +146,7 @@ variable "ecs_task_cpu" {
 }
 
 variable "ecs_task_memory" {
-  description = "Fargate task memory (MiB). Must be compatible with ecs_task_cpu."
+  description = "Fargate task memory (MiB)"
   type        = number
   default     = 512
 
@@ -157,27 +157,17 @@ variable "ecs_task_memory" {
 }
 
 variable "ecs_execution_role_arn" {
-  description = "ARN of the ECS task execution role (used by ECS agent to pull images, write logs, etc.)"
+  description = "ARN of the ECS task execution role"
   type        = string
-
-  validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.+", var.ecs_execution_role_arn))
-    error_message = "ecs_execution_role_arn must look like an IAM role ARN (arn:aws:iam::123456789012:role/RoleName)."
-  }
 }
 
 variable "ecs_task_role_arn" {
-  description = "ARN of the ECS task role (used by your application code at runtime)"
+  description = "ARN of the ECS task role"
   type        = string
-
-  validation {
-    condition     = can(regex("^arn:aws:iam::[0-9]{12}:role/.+", var.ecs_task_role_arn))
-    error_message = "ecs_task_role_arn must look like an IAM role ARN (arn:aws:iam::123456789012:role/RoleName)."
-  }
 }
 
 variable "container_image" {
-  description = "Container image for the ECS task (ECR or Docker Hub image)"
+  description = "Container image for the ECS task"
   type        = string
 
   validation {
@@ -187,7 +177,7 @@ variable "container_image" {
 }
 
 variable "ecs_desired_count" {
-  description = "Number of desired tasks to run"
+  description = "Number of desired tasks"
   type        = number
   default     = 1
 
