@@ -1,3 +1,20 @@
+locals {
+  # Accept either naming convention from terraform.tfvars:
+  # - db_username / db_password (preferred)
+  # - db_master_username / db_master_password (legacy)
+  effective_db_username = coalesce(
+    nullif(var.db_username, ""),
+    nullif(var.db_master_username, ""),
+    "admin"
+  )
+
+  effective_db_password = coalesce(
+    nullif(var.db_password, ""),
+    nullif(var.db_master_password, ""),
+    "password"
+  )
+}
+
 ############################
 # VPC + NETWORKING
 ############################
@@ -75,7 +92,6 @@ resource "aws_route_table_association" "public_subnet_b_association" {
 # SECURITY GROUPS
 ############################
 
-# Backend SG is only needed if EC2 is enabled
 resource "aws_security_group" "backend_sg" {
   count       = var.enable_ec2 ? 1 : 0
   name        = "backend-sg"
@@ -159,9 +175,11 @@ resource "aws_db_instance" "cloud495" {
   engine_version         = "8.0.40"
   instance_class         = "db.t3.micro"
   allocated_storage      = 20
-  username               = var.db_username
-  password               = var.db_password
-  db_name                = var.db_name
+
+  username = local.effective_db_username
+  password = local.effective_db_password
+  db_name  = var.db_name
+
   publicly_accessible    = true
   skip_final_snapshot    = true
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
@@ -175,23 +193,13 @@ resource "aws_db_instance" "cloud495" {
 }
 
 ############################
-# BACKEND EC2 INSTANCE
+# BACKEND EC2 INSTANCE (NO DescribeImages)
 ############################
-
-data "aws_ami" "windows_server" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["Windows_Server-2019-English-Full-Base-*"]
-  }
-}
 
 resource "aws_instance" "backend" {
   count = var.enable_ec2 ? 1 : 0
 
-  ami                         = data.aws_ami.windows_server.id
+  ami                         = var.windows_ami_id
   instance_type               = var.ec2_instance_type
   subnet_id                   = aws_subnet.public_subnet_a.id
   vpc_security_group_ids      = [aws_security_group.backend_sg[0].id]
