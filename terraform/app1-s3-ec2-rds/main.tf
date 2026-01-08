@@ -1,17 +1,14 @@
 locals {
-  # Accept either naming convention from terraform.tfvars:
-  # - db_username / db_password (preferred)
-  # - db_master_username / db_master_password (legacy)
   effective_db_username = coalesce(
     nullif(var.db_username, ""),
     nullif(var.db_master_username, ""),
-    "admin"
+    "admin",
   )
 
   effective_db_password = coalesce(
     nullif(var.db_password, ""),
     nullif(var.db_master_password, ""),
-    "password"
+    "password",
   )
 }
 
@@ -170,11 +167,11 @@ resource "aws_db_subnet_group" "cloud495_db_subnet_group_public" {
 }
 
 resource "aws_db_instance" "cloud495" {
-  identifier             = var.db_instance_identifier
-  engine                 = "mysql"
-  engine_version         = "8.0.40"
-  instance_class         = "db.t3.micro"
-  allocated_storage      = 20
+  identifier        = var.db_instance_identifier
+  engine            = "mysql"
+  engine_version    = "8.0.40"
+  instance_class    = "db.t3.micro"
+  allocated_storage = 20
 
   username = local.effective_db_username
   password = local.effective_db_password
@@ -266,7 +263,7 @@ resource "aws_s3_bucket_policy" "frontend_bucket_policy" {
         Principal = "*"
         Action    = "s3:GetObject"
         Resource  = "${aws_s3_bucket.frontend_bucket[0].arn}/*"
-      }
+      },
     ]
   })
 }
@@ -275,6 +272,11 @@ resource "aws_s3_bucket_website_configuration" "frontend_website" {
   count  = var.enable_s3_website ? 1 : 0
   bucket = aws_s3_bucket.frontend_bucket[0].id
 
-  index_document { suffix = "index.html" }
-  error_document { key = "error.html" }
+  index_document {
+    suffix = "index.html"
+  }
+
+  error_document {
+    key = "error.html"
+  }
 }
