@@ -1,198 +1,213 @@
 terraform {
-  required_version = ">= 1.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+  required_version = ">= 1.2.0"
 }
 
 provider "aws" {
-  region = var.aws_region
+  region = "us-east-1"
 }
 
-# VPC
+variable "my_ip_cidr" {
+  description = "Your public IP with CIDR suffix for RDP access"
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+############################
+# VPC + NETWORKING
+############################
+
 resource "aws_vpc" "main" {
-  cidr_block           = var.vpc_cidr
+  cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
-
-  tags = {
-    Name = "main-vpc"
-  }
+  tags = { Name = "main-vpc" }
 }
 
-# Internet Gateway
-resource "aws_internet_gateway" "main" {
+resource "aws_internet_gateway" "main_igw" {
   vpc_id = aws_vpc.main.id
-
-  tags = {
-    Name = "main-igw"
-  }
+  tags   = { Name = "main-igw" }
 }
 
-# Public Subnets
-resource "aws_subnet" "public" {
-  count                   = length(var.public_subnet_cidrs)
+resource "aws_subnet" "public_subnet_a" {
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = var.public_subnet_cidrs[count.index]
+  cidr_block              = "10.0.1.0/24"
   map_public_ip_on_launch = true
-  availability_zone       = var.availability_zones[count.index]
-
-  tags = {
-    Name = "public-subnet-${count.index + 1}"
-  }
+  availability_zone       = "us-east-1a"
+  tags                    = { Name = "public-subnet-a" }
 }
 
-# Route Table and Routes for public access
-resource "aws_route_table" "public" {
+resource "aws_subnet" "public_subnet_b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.2.0/24"
+  map_public_ip_on_launch = true
+  availability_zone       = "us-east-1b"
+  tags                    = { Name = "public-subnet-b" }
+}
+
+resource "aws_route_table" "public_rt" {
   vpc_id = aws_vpc.main.id
-
-  tags = {
-    Name = "public-rt"
-  }
+  tags   = { Name = "public-rt" }
 }
 
-resource "aws_route" "internet_access" {
-  route_table_id         = aws_route_table.public.id
+resource "aws_route" "public_internet_access" {
+  route_table_id         = aws_route_table.public_rt.id
   destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.main.id
+  gateway_id             = aws_internet_gateway.main_igw.id
 }
 
-resource "aws_route_table_association" "public_subnets" {
-  count          = length(aws_subnet.public)
-  subnet_id      = aws_subnet.public[count.index].id
-  route_table_id = aws_route_table.public.id
+resource "aws_route_table_association" "public_subnet_a_association" {
+  subnet_id      = aws_subnet.public_subnet_a.id
+  route_table_id = aws_route_table.public_rt.id
 }
 
-# Security Groups
+resource "aws_route_table_association" "public_subnet_b_association" {
+  subnet_id      = aws_subnet.public_subnet_b.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+############################
+# SECURITY GROUPS
+############################
+
 resource "aws_security_group" "backend_sg" {
   name        = "backend-sg"
-  description = "SG for backend EC2 or app services"
+  description = "Security group for backend EC2 instance"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    from_port   = var.allowed_http_port
-    to_port     = var.allowed_http_port
+    description = "Allow HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow HTTP inbound"
   }
+
   ingress {
+    description = "Allow RDP from my IP"
     from_port   = 3389
     to_port     = 3389
     protocol    = "tcp"
     cidr_blocks = [var.my_ip_cidr]
-    description = "Allow RDP inbound"
   }
+
   egress {
+    description = "Allow all outbound"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound"
-  }
-
-  tags = {
-    Name = "backend-sg"
   }
 }
 
 resource "aws_security_group" "rds_sg" {
   name        = "rds-sg"
-  description = "SG for RDS access"
+  description = "Security group for RDS"
   vpc_id      = aws_vpc.main.id
 
   ingress {
+    description = "Allow MySQL access from anywhere"
     from_port   = 3306
     to_port     = 3306
     protocol    = "tcp"
-    cidr_blocks = [var.my_ip_cidr]
-    description = "Allow MySQL access"
+    cidr_blocks = ["0.0.0.0/0"] # Restrict to your IP for production
   }
+
   egress {
+    description = "Allow all outbound"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound"
-  }
-
-  tags = {
-    Name = "rds-sg"
   }
 }
 
-# RDS Subnet Group for Public Subnets
-resource "aws_db_subnet_group" "db_subnet_group" {
-  name       = "${var.db_identifier}-db-subnet-group-public"
-  subnet_ids = aws_subnet.public.*.id
+############################
+# RDS DATABASE IN PUBLIC SUBNETS
+############################
 
-  tags = {
-    Name = "${var.db_identifier}-db-subnet-group-public"
-  }
+resource "aws_db_subnet_group" "cloud495_db_subnet_group_public" {
+  name       = "cloud495-db-subnet-group-public"
+  subnet_ids = [aws_subnet.public_subnet_a.id, aws_subnet.public_subnet_b.id]
+  tags       = { Name = "cloud495-db-subnet-group-public" }
 }
 
-# RDS Instance
-resource "aws_db_instance" "default" {
-  identifier             = var.db_identifier
-  engine                 = var.db_engine
-  engine_version         = var.db_engine_version
-  instance_class         = var.db_instance_class
-  allocated_storage      = var.db_allocated_storage
-  username               = var.db_master_username
-  password               = var.db_master_password
-  db_name                = var.db_name
-  publicly_accessible    = true
-  skip_final_snapshot    = true
-  vpc_security_group_ids = [aws_security_group.rds_sg.id]
-  db_subnet_group_name   = aws_db_subnet_group.db_subnet_group.name
-  multi_az               = false
-
-  tags = {
-    Name = var.db_identifier
-  }
-
-  depends_on = [aws_db_subnet_group.db_subnet_group]
+resource "aws_db_instance" "cloud495" {
+  identifier              = "cloud495"
+  engine                  = "mysql"
+  engine_version          = "8.0.40"
+  instance_class          = "db.t3.micro"
+  allocated_storage       = 20
+  username                = "admin"
+  password                = "password"
+  db_name                 = "cloud495"
+  publicly_accessible     = true
+  skip_final_snapshot     = true
+  vpc_security_group_ids  = [aws_security_group.rds_sg.id]
+  db_subnet_group_name    = aws_db_subnet_group.cloud495_db_subnet_group_public.name
+  multi_az                = false
+  tags                    = { Name = "cloud495" }
 }
 
-# Conditional EC2 instance
-resource "aws_instance" "backend" {
-  count                = var.enable_ec2 ? 1 : 0
-  ami                  = data.aws_ami.windows_server.id
-  instance_type        = var.instance_type
-  subnet_id            = var.subnet_id_for_ec2
-  vpc_security_group_ids = [aws_security_group.backend_sg.id]
-  associate_public_ip_address = var.associate_public_ip
-  key_name             = var.key_name
-  user_data            = var.user_data_script
-
-  tags = {
-    Name = "windows-backend"
-  }
-}
+############################
+# BACKEND EC2 INSTANCE
+############################
 
 data "aws_ami" "windows_server" {
-  count       = var.enable_ec2 ? 1 : 0
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = [var.ami_filter_name]
+    values = ["Windows_Server-2019-English-Full-Base-*"]
   }
 }
 
-# Conditional S3 Bucket and Website
-resource "aws_s3_bucket" "frontend_bucket" {
-  count        = var.enable_s3_website && length(var.s3_bucket_name) > 0 ? 1 : 0
-  bucket       = var.s3_bucket_name
-  force_destroy = true
+resource "aws_instance" "backend" {
+  ami                         = data.aws_ami.windows_server.id
+  instance_type               = "t3.medium"
+  subnet_id                   = aws_subnet.public_subnet_a.id
+  vpc_security_group_ids      = [aws_security_group.backend_sg.id]
+  associate_public_ip_address = true
+  key_name                    = "keypair-vpc1"
 
-  tags = {
-    Name = "frontend-bucket"
-  }
+  user_data = <<-EOF
+    $ErrorActionPreference = "Stop"
+    # Install .NET Framework 4.8
+    $netfxInstaller = "ndp48-x86-x64-allos-enu.exe"
+    $netfxUrl = "https://download.microsoft.com/download/9/5/F/95F98B3F-9F50-4EA0-9A19-3B2AEA4BDEDA/ndp48-x86-x64-allos-enu.exe"
+    Invoke-WebRequest -Uri $netfxUrl -OutFile "C:\\$netfxInstaller"
+    Start-Process -FilePath "C:\\$netfxInstaller" -ArgumentList "/q /norestart" -Wait
+
+    # Install Visual Studio Build Tools 2019
+    $vsInstallerUrl = "https://aka.ms/vs/16/release/vs_buildtools.exe"
+    $vsInstallerPath = "C:\\vs_buildtools.exe"
+    Invoke-WebRequest -Uri $vsInstallerUrl -OutFile $vsInstallerPath
+    Start-Process -FilePath $vsInstallerPath -ArgumentList "--quiet --wait --norestart --nocache --installPath C:\\BuildTools --add Microsoft.VisualStudio.Workload.ManagedDesktopBuildTools" -Wait
+
+    New-NetFirewallRule -DisplayName "HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
+  EOF
+
+  tags = { Name = "windows-backend" }
+}
+
+############################
+# FRONTEND S3 STATIC WEBSITE HOSTING
+############################
+
+resource "aws_s3_bucket" "frontend_bucket" {
+  bucket        = "nealb03-frontend-bucket-unique-2887"
+  force_destroy = true
+  tags          = { Name = "frontend-bucket" }
 }
 
 resource "aws_s3_bucket_public_access_block" "frontend_pab" {
-  count  = var.enable_s3_website && length(var.s3_bucket_name) > 0 ? 1 : 0
-  bucket = aws_s3_bucket.frontend_bucket[0].id
-
+  bucket                  = aws_s3_bucket.frontend_bucket.id
   block_public_acls       = false
   block_public_policy     = false
   ignore_public_acls      = false
@@ -200,30 +215,24 @@ resource "aws_s3_bucket_public_access_block" "frontend_pab" {
 }
 
 resource "aws_s3_bucket_policy" "frontend_bucket_policy" {
-  count  = var.enable_s3_website && length(var.s3_bucket_name) > 0 ? 1 : 0
-  bucket = aws_s3_bucket.frontend_bucket[0].id
-
+  bucket = aws_s3_bucket.frontend_bucket.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid       = "PublicReadGetObject"
-      Effect    = "Allow"
-      Principal = "*"
-      Action    = "s3:GetObject"
-      Resource  = "${aws_s3_bucket.frontend_bucket[0].arn}/*"
-    }]
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject",
+        Effect    = "Allow",
+        Principal = "*",
+        Action    = "s3:GetObject",
+        Resource  = "${aws_s3_bucket.frontend_bucket.arn}/*"
+      }
+    ]
   })
 }
 
 resource "aws_s3_bucket_website_configuration" "frontend_website" {
-  count  = var.enable_s3_website && length(var.s3_bucket_name) > 0 ? 1 : 0
-  bucket = aws_s3_bucket.frontend_bucket[0].id
+  bucket = aws_s3_bucket.frontend_bucket.id
 
-  index_document {
-    suffix = "index.html"
-  }
-
-  error_document {
-    key = "error.html"
-  }
+  index_document { suffix = "index.html" }
+  error_document { key = "error.html" }
 }
