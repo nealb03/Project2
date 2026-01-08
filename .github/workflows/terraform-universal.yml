@@ -1,0 +1,118 @@
+name: Terraform Universal Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - sandbox
+          - dev
+          - qa
+          - prod
+        default: sandbox
+
+      app:
+        description: "Terraform app folder under ./terraform (e.g. app1-s3-ec2-rds, app2-fargate)"
+        required: true
+        default: "app2-fargate"
+
+      aws_region:
+        description: "AWS region (e.g. us-east-1)"
+        required: true
+        default: "us-east-1"
+
+      action:
+        description: "Terraform action"
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+        default: plan
+
+      confirm_apply:
+        description: 'Type "APPLY" to run terraform apply'
+        required: true
+        default: "NO"
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    # Uses GitHub Environments so the same workflow can use different secrets per env
+    environment: ${{ inputs.environment }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_LOG: INFO
+
+      TF_ENV: ${{ inputs.environment }}
+      TF_APP: ${{ inputs.app }}
+      TF_REGION: ${{ inputs.aws_region }}
+      TF_WORKDIR: terraform/${{ inputs.app }}
+
+      # Common Terraform variables (only helpful if your TF code defines them)
+      TF_VAR_environment: ${{ inputs.environment }}
+      TF_VAR_aws_region: ${{ inputs.aws_region }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # Put this secret in each GitHub Environment: sandbox/dev/qa/prod
+          # Example: arn:aws:iam::<acct>:role/GithubActionsRole
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: github-actions-${{ inputs.environment }}
+          aws-region: ${{ env.TF_REGION }}
+
+      - name: Show deployment context
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Terraform Universal Deploy ==="
+          echo "Environment:     ${TF_ENV}"
+          echo "App:             ${TF_APP}"
+          echo "Region:          ${TF_REGION}"
+          echo "Workdir:         ${TF_WORKDIR}"
+          echo "Action:          ${{ inputs.action }}"
+          echo "Confirm apply:   ${{ inputs.confirm_apply }}"
+          echo "Git SHA:         $GITHUB_SHA"
+          echo "=================================="
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      - name: Terraform Format (auto-fix)
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform fmt -recursive
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform plan -compact-warnings -input=false -no-color
+
+      - name: Terraform Apply (confirmed only)
+        if: >
+          inputs.action == 'apply' &&
+          inputs.confirm_apply == 'APPLY'
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform apply -auto-approve -input=false -no-color
