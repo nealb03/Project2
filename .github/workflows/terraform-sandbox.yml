@@ -1,14 +1,14 @@
 name: Terraform Deploy - SANDBOX
 
 on:
-  # Auto-run planning on Terraform changes from main only
+  # Auto-run planning on Terraform changes from main branch only
   push:
     branches:
       - main
     paths:
       - 'terraform/**'
 
-  # Manual trigger for ad-hoc runs / different apps/regions
+  # Manual trigger for ad-hoc runs with inputs for app, region, and apply confirmation
   workflow_dispatch:
     inputs:
       app:
@@ -26,7 +26,7 @@ on:
 
 jobs:
   terraform-deploy-sandbox:
-    name: >-
+    name: |
       Terraform Deploy SANDBOX
       ${{ github.event_name == 'workflow_dispatch' && format('for {0}', github.event.inputs.app) || '' }}
     runs-on: ubuntu-latest
@@ -40,29 +40,18 @@ jobs:
     env:
       TF_ENV: sandbox
 
-      TF_APP: >-
-        ${{
-          github.event_name == 'workflow_dispatch'
-            && github.event.inputs.app
-            || 'app1-s3-ec2-rds'
-        }}
-      TF_REGION: >-
-        ${{
-          github.event_name == 'workflow_dispatch'
-            && github.event.inputs.aws_region
-            || 'us-east-1'
-        }}
-      TF_WORKDIR: >-
-        terraform/${{
-          github.event_name == 'workflow_dispatch'
-            && github.event.inputs.app
-            || 'app1-s3-ec2-rds'
-        }}
+      # Determine app and AWS region dynamically based on event type
+      TF_APP: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app || 'app1-s3-ec2-rds' }}
+      TF_REGION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.aws_region || 'us-east-1' }}
+
+      # Working directory for Terraform
+      TF_WORKDIR: terraform/${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app || 'app1-s3-ec2-rds' }}
+
       TF_LOG: INFO
 
-      # Enable EC2 and S3 ONLY for app1-s3-ec2-rds; false for others like app2-fargate
-      ENABLE_EC2: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.app == 'app1-s3-ec2-rds') || (!github.event_name == 'workflow_dispatch' && 'true') && 'true' || 'false' }}
-      ENABLE_S3_WEBSITE: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.app == 'app1-s3-ec2-rds') || (!github.event_name == 'workflow_dispatch' && 'true') && 'true' || 'false' }}
+      # Enable EC2 and S3 only for app1-s3-ec2-rds, disable for others
+      ENABLE_EC2: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app == 'app1-s3-ec2-rds' || (!github.event_name == 'workflow_dispatch') && 'true' || 'false' }}
+      ENABLE_S3_WEBSITE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app == 'app1-s3-ec2-rds' || (!github.event_name == 'workflow_dispatch') && 'true' || 'false' }}
 
     steps:
       - name: Checkout repository
@@ -113,7 +102,7 @@ jobs:
             -var="enable_ec2=${{ env.ENABLE_EC2 }}" \
             -var="enable_s3_website=${{ env.ENABLE_S3_WEBSITE }}"
 
-      - name: Terraform Apply (SANDBOX, requires confirm_apply == "APPLY")
+      - name: Terraform Apply (SANDBOX)
         if: >
           github.event_name == 'workflow_dispatch' &&
           github.event.inputs.confirm_apply == 'APPLY'

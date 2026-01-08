@@ -1,72 +1,85 @@
-variable "my_ip_cidr" {
-  description = "Your public IP with CIDR suffix for RDP access"
-  type        = string
-  default     = "0.0.0.0/0"
-}
-
 variable "enable_ec2" {
-  description = "Enable EC2 instance deployment"
   type        = bool
+  description = "Enable or disable deployment of EC2 instance"
   default     = true
 }
 
 variable "enable_s3_website" {
-  description = "Enable S3 static website deployment"
   type        = bool
+  description = "Enable or disable deployment of S3 static website"
   default     = true
 }
 
-variable "db_identifier" {
-  description = "RDS database identifier"
+variable "my_ip_cidr" {
   type        = string
+  description = "Your public IP with CIDR suffix for RDP access"
+  default     = "0.0.0.0/0"
+}
+
+variable "db_identifier" {
+  type        = string
+  description = "RDS database identifier"
   default     = "cloud495"
 }
 
-variable "public_subnet_a_cidr" {
-  description = "CIDR block for public subnet A"
+variable "db_master_username" {
   type        = string
+  description = "RDS master username"
+  default     = "admin"
+}
+
+variable "db_master_password" {
+  type        = string
+  description = "RDS master password"
+  default     = "password"
+  sensitive   = true
+}
+
+variable "public_subnet_a_cidr" {
+  type        = string
+  description = "CIDR block for public subnet A"
   default     = "10.0.1.0/24"
 }
 
 variable "public_subnet_b_cidr" {
-  description = "CIDR block for public subnet B"
   type        = string
+  description = "CIDR block for public subnet B"
   default     = "10.0.2.0/24"
 }
 
 variable "aws_region" {
-  description = "AWS region to deploy to"
   type        = string
+  description = "AWS region"
   default     = "us-east-1"
 }
 
 variable "instance_type" {
-  description = "EC2 instance type"
   type        = string
+  description = "EC2 instance type"
   default     = "t3.medium"
 }
 
 variable "key_name" {
-  description = "EC2 key pair name"
   type        = string
+  description = "Key pair name for EC2 instance"
   default     = "keypair-vpc1"
 }
 
 variable "ami_filter_name" {
-  description = "AMI filter pattern for Windows Server"
   type        = string
+  description = "AMI filter pattern for Windows Server 2019"
   default     = "Windows_Server-2019-English-Full-Base-*"
 }
 
 variable "associate_public_ip" {
-  description = "Whether to associate a public IP with the EC2 instance"
   type        = bool
+  description = "Whether to assign a public IP to the EC2 instance"
   default     = true
 }
 
 variable "user_data_script" {
-  description = "User data script for EC2 instance initialization"
   type        = string
+  description = "User data script for EC2 instance initialization"
   default     = <<-EOD
     $ErrorActionPreference = "Stop"
     # Install .NET Framework 4.8
