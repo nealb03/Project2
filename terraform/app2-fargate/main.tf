@@ -1,11 +1,12 @@
 terraform {
+  required_version = ">= 1.2.0"
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
   }
-  required_version = ">= 1.2.0"
 }
 
 provider "aws" {
@@ -13,7 +14,7 @@ provider "aws" {
 }
 
 ############################
-# Cross-variable validation (safe place)
+# Networking (VPC + Public Subnets)
 ############################
 
 resource "aws_vpc" "main" {
@@ -21,7 +22,9 @@ resource "aws_vpc" "main" {
   enable_dns_support   = true
   enable_dns_hostnames = true
 
-  tags = { Name = "fargate-vpc" }
+  tags = {
+    Name = "app2-fargate-vpc"
+  }
 
   lifecycle {
     precondition {
@@ -31,49 +34,54 @@ resource "aws_vpc" "main" {
   }
 }
 
-############################
-# Networking
-############################
-
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
-  tags   = { Name = "fargate-igw" }
+
+  tags = {
+    Name = "app2-fargate-igw"
+  }
 }
 
 resource "aws_subnet" "public" {
   count                   = length(var.public_subnet_cidrs)
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_cidrs[count.index]
-  map_public_ip_on_launch = true
   availability_zone       = var.availability_zones[count.index]
+  map_public_ip_on_launch = true
 
-  tags = { Name = "public-subnet-${count.index + 1}" }
+  tags = {
+    Name = "app2-public-${count.index + 1}"
+  }
 }
 
-resource "aws_route_table" "public_rt" {
+resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
-  tags   = { Name = "public-route-table" }
+
+  tags = {
+    Name = "app2-public-rt"
+  }
 }
 
-resource "aws_route" "internet_access" {
-  route_table_id         = aws_route_table.public_rt.id
+resource "aws_route" "public_internet" {
+  route_table_id         = aws_route_table.public.id
   destination_cidr_block = "0.0.0.0/0"
   gateway_id             = aws_internet_gateway.igw.id
 }
 
-resource "aws_route_table_association" "pub_subnet_assoc" {
+resource "aws_route_table_association" "public" {
   count          = length(aws_subnet.public)
   subnet_id      = aws_subnet.public[count.index].id
-  route_table_id = aws_route_table.public_rt.id
+  route_table_id = aws_route_table.public.id
 }
 
 ############################
-# Security Group for ECS Tasks
+# Security Groups
 ############################
 
-resource "aws_security_group" "ecs_sg" {
-  name        = "ecs-tasks-sg"
-  description = "Allow HTTP inbound to Fargate tasks"
+# ECS task SG: allow inbound HTTP from the internet; allow all egress.
+resource "aws_security_group" "ecs_tasks" {
+  name        = "app2-ecs-tasks-sg"
+  description = "Allow HTTP to Fargate tasks"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -90,18 +98,18 @@ resource "aws_security_group" "ecs_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "ecs-tasks-sg" }
+  tags = {
+    Name = "app2-ecs-tasks-sg"
+  }
 }
 
-############################
-# RDS Security Group (DEMO: Internet-accessible, locked to your IP)
-############################
-
-resource "aws_security_group" "rds_sg" {
-  name        = "rds-sg"
-  description = "SG for RDS (demo internet access)"
+# RDS SG (DEMO): allow MySQL from your IP and from ECS tasks.
+resource "aws_security_group" "rds" {
+  name        = "app2-rds-sg"
+  description = "Demo RDS access (publicly reachable but locked down)"
   vpc_id      = aws_vpc.main.id
 
+  # Your workstation IP only
   ingress {
     from_port   = 3306
     to_port     = 3306
@@ -109,11 +117,12 @@ resource "aws_security_group" "rds_sg" {
     cidr_blocks = [var.my_ip_cidr]
   }
 
+  # Allow ECS tasks to reach DB
   ingress {
     from_port       = 3306
     to_port         = 3306
     protocol        = "tcp"
-    security_groups = [aws_security_group.ecs_sg.id]
+    security_groups = [aws_security_group.ecs_tasks.id]
   }
 
   egress {
@@ -123,22 +132,23 @@ resource "aws_security_group" "rds_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "rds-sg" }
+  tags = {
+    Name = "app2-rds-sg"
+  }
 }
 
 ############################
-# RDS Subnet Group (public subnets for demo reachability)
+# RDS (Public demo, locked to your IP)
 ############################
 
-resource "aws_db_subnet_group" "db_subnet_group" {
-  name       = "${var.db_identifier}-subnet-group"
+resource "aws_db_subnet_group" "db" {
+  name       = "${var.db_identifier}-subnets"
   subnet_ids = aws_subnet.public[*].id
-  tags       = { Name = "${var.db_identifier}-subnet-group" }
-}
 
-############################
-# RDS Instance (public for demo)
-############################
+  tags = {
+    Name = "${var.db_identifier}-subnets"
+  }
+}
 
 resource "aws_db_instance" "db" {
   identifier        = var.db_identifier
@@ -146,52 +156,55 @@ resource "aws_db_instance" "db" {
   engine_version    = var.db_engine_version
   instance_class    = var.db_instance_class
   allocated_storage = var.db_allocated_storage
-  username          = var.db_master_username
-  password          = var.db_master_password
-  db_name           = var.db_name
 
+  username = var.db_master_username
+  password = var.db_master_password
+  db_name  = var.db_name
+
+  # Demo settings:
   publicly_accessible = true
+  multi_az            = false
   skip_final_snapshot = true
 
-  vpc_security_group_ids = [aws_security_group.rds_sg.id]
-  db_subnet_group_name   = aws_db_subnet_group.db_subnet_group.name
-  multi_az               = false
+  vpc_security_group_ids = [aws_security_group.rds.id]
+  db_subnet_group_name   = aws_db_subnet_group.db.name
 
-  tags = { Name = var.db_identifier }
+  tags = {
+    Name = var.db_identifier
+  }
 }
 
 ############################
-# ECS Cluster
+# ECS (Cluster + Task Definition + Service)
 ############################
 
 resource "aws_ecs_cluster" "cluster" {
   name = "fargate-cluster"
 }
 
-############################
-# ECS Task Definition
-############################
-
 resource "aws_ecs_task_definition" "task" {
-  family = var.ecs_task_family
+  family                   = var.ecs_task_family
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
 
-  # ECS API expects strings; variables are numbers -> convert safely.
+  # ECS API wants strings here
   cpu    = tostring(var.ecs_task_cpu)
   memory = tostring(var.ecs_task_memory)
 
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  execution_role_arn       = var.ecs_execution_role_arn
-  task_role_arn            = var.ecs_task_role_arn
+  execution_role_arn = var.ecs_execution_role_arn
+  task_role_arn      = var.ecs_task_role_arn
 
   container_definitions = jsonencode([
     {
       name  = "app2-container"
       image = var.container_image
 
+      essential = true
+
       portMappings = [
         {
           containerPort = var.allowed_http_port
+          hostPort      = var.allowed_http_port
           protocol      = "tcp"
         }
       ]
@@ -207,10 +220,6 @@ resource "aws_ecs_task_definition" "task" {
   ])
 }
 
-############################
-# ECS Service
-############################
-
 resource "aws_ecs_service" "service" {
   name            = "fargate-service"
   cluster         = aws_ecs_cluster.cluster.id
@@ -220,9 +229,10 @@ resource "aws_ecs_service" "service" {
 
   network_configuration {
     subnets          = aws_subnet.public[*].id
-    security_groups  = [aws_security_group.ecs_sg.id]
+    security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = true
   }
 
+  # Ensure DB exists before tasks start if they need it on boot
   depends_on = [aws_db_instance.db]
 }
