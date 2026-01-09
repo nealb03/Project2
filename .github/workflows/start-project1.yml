@@ -1,65 +1,95 @@
 name: Start Project1 (S3+EC2+RDS)
 
 on:
-  workflow_dispatch:  # Manual trigger from GitHub Actions tab
+  workflow_dispatch:
 
 jobs:
   start-project1:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
-      
-      - name: Start EC2 instance
+
+      - name: Validate target instance
         run: |
-          echo "Starting EC2 instance..."
-          aws ec2 start-instances --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
-          echo "EC2 instance start command sent"
-      
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          echo "Target instance id: $IID"
+          aws ec2 describe-instances \
+            --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].[InstanceId,State.Name,Tags[?Key==`Name`].Value|[0],InstanceType,Placement.AvailabilityZone,PublicIpAddress]' \
+            --output table
+
+      - name: Start EC2 instance (if needed)
+        run: |
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+
+          STATE=$(aws ec2 describe-instances \
+            --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].State.Name' \
+            --output text)
+
+          echo "Current state: $STATE"
+
+          if [ "$STATE" = "running" ]; then
+            echo "Instance already running."
+          else
+            aws ec2 start-instances --instance-ids "$IID"
+            echo "Start command sent."
+          fi
+
       - name: Wait for EC2 instance to be running
         run: |
-          echo "Waiting for instance to be running..."
-          aws ec2 wait instance-running --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
-          echo "EC2 instance is now running"
-      
-      - name: Wait for Windows to boot (additional 60 seconds)
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          aws ec2 wait instance-running --instance-ids "$IID"
+          echo "EC2 instance is now running."
+
+      - name: Wait for Windows to boot (90 seconds)
         run: |
           echo "Waiting for Windows Server to fully boot..."
-          sleep 60
-      
+          sleep 90
+
       - name: Start Backend Application via SSM
         run: |
-          echo "Starting ASP.NET Core backend..."
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          echo "Starting ASP.NET Core backend via SSM on $IID..."
+
           aws ssm send-command \
-            --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }} \
+            --instance-ids "$IID" \
             --document-name "AWS-RunPowerShellScript" \
-            --parameters 'commands=["cd C:\\Backend01\\MyWebApi", "Start-Process powershell -ArgumentList \"-Command\", \"dotnet run --urls http://0.0.0.0:5001\" -WindowStyle Hidden"]' \
+            --parameters 'commands=["cd C:\\Backend01\\MyWebApi", "Start-Process powershell -WindowStyle Hidden -ArgumentList ''-Command'',''dotnet run --urls http://0.0.0.0:5001''"]' \
             --comment "Start Project1 Backend"
-          echo "Backend start command sent via SSM"
-      
+
+          echo "Backend start command sent via SSM."
+
       - name: Get EC2 Public IP
         id: get-ip
         run: |
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
           PUBLIC_IP=$(aws ec2 describe-instances \
-            --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }} \
+            --instance-ids "$IID" \
             --query 'Reservations[0].Instances[0].PublicIpAddress' \
             --output text)
           echo "Public IP: $PUBLIC_IP"
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-      
+
       - name: Summary
         run: |
           echo "✅ Project1 Started Successfully!"
           echo ""
           echo "📍 Backend API: http://${{ steps.get-ip.outputs.public_ip }}:5001"
-          echo "📍 Frontend: http://nealb03-frontend-bucket-unique-2887.s3-website-us-east-1.amazonaws.com/"
+          echo "📍 Frontend: http://nealb03-frontend-0109-73921.s3-website-us-east-1.amazonaws.com/"
           echo ""
           echo "⏰ Started at: $(date)"
