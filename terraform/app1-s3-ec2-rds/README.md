@@ -26,7 +26,7 @@ When enabled via `terraform.tfvars`, this stack can create:
 
 
 
-\## What this stack does NOT create
+\## What this stack does NOT create.
 
 
 
