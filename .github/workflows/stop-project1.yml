@@ -1,50 +1,85 @@
 name: Stop Project1 (S3+EC2+RDS)
 
 on:
-  workflow_dispatch:  # Manual trigger from GitHub Actions tab
+  workflow_dispatch:
 
 jobs:
   stop-project1:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
-      
-      - name: Stop Backend Application via SSM
+
+      - name: Validate target instance
         run: |
-          echo "Stopping ASP.NET Core backend..."
-          aws ssm send-command \
-            --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }} \
-            --document-name "AWS-RunPowerShellScript" \
-            --parameters 'commands=["Stop-Process -Name dotnet -Force -ErrorAction SilentlyContinue", "Write-Output \"Backend stopped\""]' \
-            --comment "Stop Project1 Backend"
-          echo "Backend stop command sent via SSM"
-      
-      - name: Wait for backend to stop
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          echo "Target instance id: $IID"
+          aws ec2 describe-instances \
+            --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].[InstanceId,State.Name,Tags[?Key==`Name`].Value|[0],InstanceType,Placement.AvailabilityZone,PublicIpAddress]' \
+            --output table
+
+      - name: Stop Backend Application via SSM (best effort; only if running)
         run: |
-          echo "Waiting 10 seconds for backend to stop gracefully..."
-          sleep 10
-      
-      - name: Stop EC2 instance
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+
+          STATE=$(aws ec2 describe-instances \
+            --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].State.Name' \
+            --output text)
+
+          echo "Instance state is: $STATE"
+
+          if [ "$STATE" != "running" ]; then
+            echo "Instance is not running; skipping SSM stop-command."
+          else
+            echo "Stopping ASP.NET Core backend..."
+            aws ssm send-command \
+              --instance-ids "$IID" \
+              --document-name "AWS-RunPowerShellScript" \
+              --parameters 'commands=["Stop-Process -Name dotnet -Force -ErrorAction SilentlyContinue", "Write-Output ''Backend stopped''"]' \
+              --comment "Stop Project1 Backend"
+            echo "Backend stop command sent via SSM."
+            sleep 10
+          fi
+
+      - name: Stop EC2 instance (if not already stopped)
         run: |
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+
+          STATE=$(aws ec2 describe-instances \
+            --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].State.Name' \
+            --output text)
+
+          echo "Current state: $STATE"
+
+          if [ "$STATE" = "stopped" ]; then
+            echo "Instance already stopped."
+            exit 0
+          fi
+
+          if [ "$STATE" = "terminated" ]; then
+            echo "ERROR: Instance is terminated."
+            exit 1
+          fi
+
           echo "Stopping EC2 instance..."
-          aws ec2 stop-instances --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
-          echo "EC2 instance stop command sent"
-      
-      - name: Wait for EC2 instance to be stopped
-        run: |
-          echo "Waiting for instance to be stopped..."
-          aws ec2 wait instance-stopped --instance-ids ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
-          echo "EC2 instance is now stopped"
-      
+          aws ec2 stop-instances --instance-ids "$IID"
+          aws ec2 wait instance-stopped --instance-ids "$IID"
+          echo "EC2 instance is now stopped."
+
       - name: Summary
         run: |
           echo "✅ Project1 Stopped Successfully!"
