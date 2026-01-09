@@ -1,49 +1,88 @@
+# NOTE:
+# app2-fargate/main.tf currently contains demo scaffolding only (no active resources/modules).
+# Outputs avoid referencing aws_* resources or module.* outputs so that `terraform validate` passes.
+
 output "aws_region" {
   description = "AWS region used for this deployment"
   value       = var.aws_region
 }
 
-output "vpc_id" {
-  description = "VPC ID"
-  value       = aws_vpc.main.id
+output "my_ip_cidr" {
+  description = "Client IP CIDR used for inbound rules (demo)"
+  value       = var.my_ip_cidr
 }
 
-output "public_subnet_ids" {
-  description = "Public subnet IDs"
-  value       = aws_subnet.public[*].id
+output "vpc_cidr" {
+  description = "VPC CIDR configuration"
+  value       = var.vpc_cidr
 }
 
-output "ecs_cluster_id" {
-  description = "ECS cluster ID"
-  value       = aws_ecs_cluster.cluster.id
+output "public_subnet_cidrs" {
+  description = "Public subnet CIDRs configuration"
+  value       = var.public_subnet_cidrs
 }
 
-output "ecs_service_name" {
-  description = "ECS service name"
-  value       = aws_ecs_service.service.name
+output "availability_zones" {
+  description = "Availability zones configuration"
+  value       = var.availability_zones
 }
 
-output "ecs_service_id" {
-  description = "ECS service ID (provider-supported identifier)"
-  value       = aws_ecs_service.service.id
+output "allowed_http_port" {
+  description = "Inbound HTTP port exposed by the container/service"
+  value       = var.allowed_http_port
 }
 
-output "ecs_task_definition_arn" {
-  description = "Task definition ARN"
-  value       = aws_ecs_task_definition.task.arn
+output "db_identifier" {
+  description = "RDS identifier configuration"
+  value       = var.db_identifier
 }
 
-output "rds_endpoint" {
-  description = "RDS endpoint address"
-  value       = aws_db_instance.db.address
+output "db_engine" {
+  description = "RDS engine configuration"
+  value       = var.db_engine
 }
 
-output "rds_port" {
-  description = "RDS port"
-  value       = aws_db_instance.db.port
+output "db_engine_version" {
+  description = "RDS engine version configuration"
+  value       = var.db_engine_version
 }
 
-output "rds_identifier" {
-  description = "RDS instance identifier"
-  value       = aws_db_instance.db.id
+output "db_instance_class" {
+  description = "RDS instance class configuration"
+  value       = var.db_instance_class
+}
+
+output "db_allocated_storage" {
+  description = "RDS allocated storage configuration (GB)"
+  value       = var.db_allocated_storage
+}
+
+output "db_name" {
+  description = "Initial DB name configuration"
+  value       = var.db_name
+}
+
+output "ecs_task_family" {
+  description = "ECS task family name configuration"
+  value       = var.ecs_task_family
+}
+
+output "ecs_task_cpu" {
+  description = "Fargate task CPU units configuration"
+  value       = var.ecs_task_cpu
+}
+
+output "ecs_task_memory" {
+  description = "Fargate task memory (MiB) configuration"
+  value       = var.ecs_task_memory
+}
+
+output "container_image" {
+  description = "Container image configured for the ECS task"
+  value       = var.container_image
+}
+
+output "ecs_desired_count" {
+  description = "Desired ECS task count"
+  value       = var.ecs_desired_count
 }
