@@ -1,289 +1,161 @@
-locals {
-  # Convert empty strings to null so coalesce() can skip them
-  db_username_candidate        = var.db_username != "" ? var.db_username : null
-  db_master_username_candidate = var.db_master_username != "" ? var.db_master_username : null
+###############################################################################
+# MODULE-BASED DEMO (COMMENTED OUT)
+# Purpose: Demonstrate how this app1 root module could be refactored into
+# reusable Terraform modules under ../modules/* without breaking the current app.
+#
+# IMPORTANT:
+# - Everything below is commented out; it has ZERO effect on your current stack.
+# - If you ever decide to migrate, uncomment one module at a time and delete the
+#   overlapping "resource" blocks above.
+###############################################################################
 
-  db_password_candidate        = var.db_password != "" ? var.db_password : null
-  db_master_password_candidate = var.db_master_password != "" ? var.db_master_password : null
+# -----------------------------------------------------------------------------
+# Suggested module split for App1 (for interview/demo)
+#   ../modules/network         -> VPC, IGW, public subnets, public route table
+#   ../modules/security-group  -> backend SG + db SG
+#   ../modules/rds             -> DB subnet group + DB instance
+#   ../modules/ec2-backend     -> Windows EC2 + user_data + optional key pair usage
+#   ../modules/s3-website      -> S3 bucket + public access block + policy + website config
+#
+# Your repo currently shows some of these modules (network, security-group, rds).
+# The others (ec2-backend, s3-website) can be “future module ideas” in the demo.
+# -----------------------------------------------------------------------------
 
-  effective_db_username = coalesce(
-    local.db_username_candidate,
-    local.db_master_username_candidate,
-    "cloud-495",
-  )
+# locals {
+#   # Keep your existing local credential logic (copied conceptually)
+#   db_username_candidate        = var.db_username != "" ? var.db_username : null
+#   db_master_username_candidate = var.db_master_username != "" ? var.db_master_username : null
+#
+#   db_password_candidate        = var.db_password != "" ? var.db_password : null
+#   db_master_password_candidate = var.db_master_password != "" ? var.db_master_password : null
+#
+#   effective_db_username = coalesce(
+#     local.db_username_candidate,
+#     local.db_master_username_candidate,
+#     "cloud-495",
+#   )
+#
+#   effective_db_password = coalesce(
+#     local.db_password_candidate,
+#     local.db_master_password_candidate,
+#     "password",
+#   )
+#
+#   name_prefix = "app1-${var.environment}"
+#
+#   common_tags = {
+#     Application = "app1"
+#     Environment = var.environment
+#     ManagedBy   = "terraform"
+#   }
+# }
 
-  effective_db_password = coalesce(
-    local.db_password_candidate,
-    local.db_master_password_candidate,
-    "password",
-  )
-}
+# -----------------------------------------------------------------------------
+# NETWORK MODULE (instead of aws_vpc + igw + public subnets + public route table)
+# -----------------------------------------------------------------------------
+# module "network" {
+#   source      = "../modules/network"
+#   name_prefix = local.name_prefix
+#
+#   # If your network module uses a single CIDR and az_count:
+#   vpc_cidr = "10.0.0.0/16"
+#   az_count = 2
+#
+#   # If your module supports tags:
+#   tags = local.common_tags
+# }
+#
+# # If you need deterministic subnet selection like “public_subnet_a/b”, you can
+# # use indexing:
+# # local.public_subnet_a_id = module.network.public_subnet_ids[0]
+# # local.public_subnet_b_id = module.network.public_subnet_ids[1]
 
-############################
-# VPC + NETWORKING
-############################
+# -----------------------------------------------------------------------------
+# SECURITY GROUP MODULE
+# NOTE: Your existing app1 has TWO SGs:
+# - backend_sg (conditional on enable_ec2)
+# - rds_sg (always)
+#
+# A module can still support conditional creation, but for demo purposes you can
+# either:
+#  (A) keep EC2 SG as a resource in root, or
+#  (B) create a dedicated module that supports enable_ec2.
+# Below is a demo showing a generic module approach.
+# -----------------------------------------------------------------------------
+# module "security_group" {
+#   source      = "../modules/security-group"
+#   name_prefix = local.name_prefix
+#   vpc_id      = module.network.vpc_id
+#
+#   # app1 uses HTTP 80 and RDS MySQL 3306
+#   container_port = 80
+#   db_port        = 3306
+#
+#   tags = local.common_tags
+# }
+#
+# # For demo mapping:
+# # local.backend_sg_id = module.security_group.ecs_sg_id  # (rename output in your module if you want)
+# # local.rds_sg_id     = module.security_group.db_sg_id
 
-resource "aws_vpc" "main" {
-  cidr_block           = "10.0.0.0/16"
-  enable_dns_support   = true
-  enable_dns_hostnames = true
+# -----------------------------------------------------------------------------
+# RDS MODULE (instead of aws_db_subnet_group + aws_db_instance)
+# NOTE: Your current app1 uses PUBLIC subnets for a demo DB (publicly_accessible=true)
+# The sample rds module we discussed earlier is more “private-subnet” oriented.
+# For a demo, you can still show wiring and explain you'd adjust module flags:
+#   publicly_accessible, subnet_ids selection, etc.
+# -----------------------------------------------------------------------------
+# module "rds" {
+#   source      = "../modules/rds"
+#   name_prefix = local.name_prefix
+#
+#   # For your current behavior (public demo DB):
+#   # If you enhance the rds module later, pass "subnet_ids" instead of "private_subnet_ids"
+#   # subnet_ids = module.network.public_subnet_ids
+#
+#   # If your rds module expects private subnets, show best practice wiring:
+#   private_subnet_ids = module.network.private_subnet_ids
+#
+#   # Map SG output
+#   db_sg_id = module.security_group.db_sg_id
+#
+#   db_name         = var.db_name
+#   master_username = local.effective_db_username
+#   master_password = local.effective_db_password
+#
+#   tags = local.common_tags
+# }
 
-  tags = {
-    Name        = "main-vpc"
-    Environment = var.environment
-  }
-}
+# -----------------------------------------------------------------------------
+# EC2 BACKEND MODULE (future demo idea)
+# You currently have enable_ec2 and a Windows user_data bootstrap.
+# This is a great candidate for a module, but you may not have created it yet.
+# -----------------------------------------------------------------------------
+# module "ec2_backend" {
+#   source      = "../modules/ec2-backend"
+#   count       = var.enable_ec2 ? 1 : 0
+#
+#   name_prefix  = local.name_prefix
+#   subnet_id    = module.network.public_subnet_ids[0]
+#   sg_id        = module.security_group.ecs_sg_id
+#
+#   ami_id       = var.windows_ami_id
+#   instance_type= var.ec2_instance_type
+#   key_name     = var.ec2_key_name
+#   my_ip_cidr   = var.my_ip_cidr
+#
+#   tags = local.common_tags
+# }
 
-resource "aws_internet_gateway" "main_igw" {
-  vpc_id = aws_vpc.main.id
-
-  tags = {
-    Name        = "main-igw"
-    Environment = var.environment
-  }
-}
-
-resource "aws_subnet" "public_subnet_a" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.1.0/24"
-  map_public_ip_on_launch = true
-  availability_zone       = var.az_a
-
-  tags = {
-    Name        = "public-subnet-a"
-    Environment = var.environment
-  }
-}
-
-resource "aws_subnet" "public_subnet_b" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.2.0/24"
-  map_public_ip_on_launch = true
-  availability_zone       = var.az_b
-
-  tags = {
-    Name        = "public-subnet-b"
-    Environment = var.environment
-  }
-}
-
-resource "aws_route_table" "public_rt" {
-  vpc_id = aws_vpc.main.id
-
-  tags = {
-    Name        = "public-rt"
-    Environment = var.environment
-  }
-}
-
-resource "aws_route" "public_internet_access" {
-  route_table_id         = aws_route_table.public_rt.id
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.main_igw.id
-}
-
-resource "aws_route_table_association" "public_subnet_a_association" {
-  subnet_id      = aws_subnet.public_subnet_a.id
-  route_table_id = aws_route_table.public_rt.id
-}
-
-resource "aws_route_table_association" "public_subnet_b_association" {
-  subnet_id      = aws_subnet.public_subnet_b.id
-  route_table_id = aws_route_table.public_rt.id
-}
-
-############################
-# SECURITY GROUPS
-############################
-
-resource "aws_security_group" "backend_sg" {
-  count       = var.enable_ec2 ? 1 : 0
-  name        = "backend-sg"
-  description = "Security group for backend EC2 instance"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description = "Allow HTTP from anywhere"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "Allow RDP from my IP"
-    from_port   = 3389
-    to_port     = 3389
-    protocol    = "tcp"
-    cidr_blocks = [var.my_ip_cidr]
-  }
-
-  egress {
-    description = "Allow all outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name        = "backend-sg"
-    Environment = var.environment
-  }
-}
-
-resource "aws_security_group" "rds_sg" {
-  name        = "rds-sg"
-  description = "Security group for RDS"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description = "Allow MySQL access from anywhere (restrict for production)"
-    from_port   = 3306
-    to_port     = 3306
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    description = "Allow all outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name        = "rds-sg"
-    Environment = var.environment
-  }
-}
-
-############################
-# RDS DATABASE IN PUBLIC SUBNETS
-############################
-
-resource "aws_db_subnet_group" "cloud495_db_subnet_group_public" {
-  name       = "cloud495-db-subnet-group-public"
-  subnet_ids = [aws_subnet.public_subnet_a.id, aws_subnet.public_subnet_b.id]
-
-  tags = {
-    Name        = "cloud495-db-subnet-group-public"
-    Environment = var.environment
-  }
-}
-
-resource "aws_db_instance" "cloud495" {
-  identifier        = var.db_instance_identifier
-  engine            = "mysql"
-  engine_version    = "8.0.40"
-  instance_class    = "db.t3.micro"
-  allocated_storage = 20
-
-  username = local.effective_db_username
-  password = local.effective_db_password
-  db_name  = var.db_name
-
-  publicly_accessible    = true
-  skip_final_snapshot    = true
-  vpc_security_group_ids = [aws_security_group.rds_sg.id]
-  db_subnet_group_name   = aws_db_subnet_group.cloud495_db_subnet_group_public.name
-  multi_az               = false
-
-  tags = {
-    Name        = "cloud495"
-    Environment = var.environment
-  }
-}
-
-############################
-# BACKEND EC2 INSTANCE (NO DescribeImages)
-############################
-
-resource "aws_instance" "backend" {
-  count = var.enable_ec2 ? 1 : 0
-
-  ami                         = var.windows_ami_id
-  instance_type               = var.ec2_instance_type
-  subnet_id                   = aws_subnet.public_subnet_a.id
-  vpc_security_group_ids      = [aws_security_group.backend_sg[0].id]
-  associate_public_ip_address = true
-  key_name                    = var.ec2_key_name
-
-  user_data = <<-EOF
-    $ErrorActionPreference = "Stop"
-    # Install .NET Framework 4.8
-    $netfxInstaller = "ndp48-x86-x64-allos-enu.exe"
-    $netfxUrl = "https://download.microsoft.com/download/9/5/F/95F98B3F-9F50-4EA0-9A19-3B2AEA4BDEDA/ndp48-x86-x64-allos-enu.exe"
-    Invoke-WebRequest -Uri $netfxUrl -OutFile "C:\\$netfxInstaller"
-    Start-Process -FilePath "C:\\$netfxInstaller" -ArgumentList "/q /norestart" -Wait
-
-    # Install Visual Studio Build Tools 2019
-    $vsInstallerUrl = "https://aka.ms/vs/16/release/vs_buildtools.exe"
-    $vsInstallerPath = "C:\\vs_buildtools.exe"
-    Invoke-WebRequest -Uri $vsInstallerUrl -OutFile $vsInstallerPath
-    Start-Process -FilePath $vsInstallerPath -ArgumentList "--quiet --wait --norestart --nocache --installPath C:\\BuildTools --add Microsoft.VisualStudio.Workload.ManagedDesktopBuildTools" -Wait
-
-    New-NetFirewallRule -DisplayName "HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow
-  EOF
-
-  tags = {
-    Name        = "windows-backend"
-    Environment = var.environment
-  }
-}
-
-############################
-# FRONTEND S3 STATIC WEBSITE HOSTING
-############################
-
-resource "aws_s3_bucket" "frontend_bucket" {
-  count         = var.enable_s3_website ? 1 : 0
-  bucket        = var.s3_bucket_name
-  force_destroy = true
-
-  tags = {
-    Name        = "frontend-bucket"
-    Environment = var.environment
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "frontend_pab" {
-  count                   = var.enable_s3_website ? 1 : 0
-  bucket                  = aws_s3_bucket.frontend_bucket[0].id
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
-}
-
-resource "aws_s3_bucket_policy" "frontend_bucket_policy" {
-  count  = var.enable_s3_website ? 1 : 0
-  bucket = aws_s3_bucket.frontend_bucket[0].id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "PublicReadGetObject"
-        Effect    = "Allow"
-        Principal = "*"
-        Action    = "s3:GetObject"
-        Resource  = "${aws_s3_bucket.frontend_bucket[0].arn}/*"
-      },
-    ]
-  })
-}
-
-resource "aws_s3_bucket_website_configuration" "frontend_website" {
-  count  = var.enable_s3_website ? 1 : 0
-  bucket = aws_s3_bucket.frontend_bucket[0].id
-
-  index_document {
-    suffix = "index.html"
-  }
-
-  error_document {
-    key = "error.html"
-  }
-}
+# -----------------------------------------------------------------------------
+# S3 WEBSITE MODULE (future demo idea)
+# You currently have enable_s3_website and several bucket resources.
+# This is also a clean module candidate.
+# -----------------------------------------------------------------------------
+# module "s3_website" {
+#   source      = "../modules/s3-website"
+#   count       = var.enable_s3_website ? 1 : 0
+#
+#   bucket_name = var.s3_bucket_name
+#   tags        = local.common_tags
+# }
