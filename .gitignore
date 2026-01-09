@@ -7,3 +7,5 @@ crash.*.log
 
 # Keep Terraform lock files
 !**/.terraform.lock.hclterraform/app1-s3-ec2-rds/terraform.tfvars
+terraform/**/terraform.tfvars
+terraform/**/.terraform/**
