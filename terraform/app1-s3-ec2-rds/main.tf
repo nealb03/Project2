@@ -1,3 +1,23 @@
+
+# -----------------------------------------------------------------------------
+# app1-s3-ec2-rds (RESOURCE-BASED ROOT MODULE)
+#
+# Purpose: A straightforward, resource-based Terraform root module that provisions:
+# - VPC, IGW, public subnets, and routing
+# - Security groups for EC2 and RDS
+# - RDS MySQL instance (publicly accessible for demo; lock down for production)
+# - Optional Windows EC2 instance (enable_ec2)
+# - Optional S3 static website hosting (enable_s3_website)
+#
+# Feature toggles:
+# - var.enable_ec2        controls aws_instance.backend and its security group
+# - var.enable_s3_website controls S3 bucket + website configuration + policy
+#
+# Notes (for interview/demo):
+# - This stack is intentionally NOT module-factored to keep the resource wiring visible.
+# - A future refactor could extract reusable modules: network, security-groups, rds, ec2, s3-website.
+# -----------------------------------------------------------------------------
+
 locals {
   # Convert empty strings to null so coalesce() can skip them
   db_username_candidate        = var.db_username != "" ? var.db_username : null
