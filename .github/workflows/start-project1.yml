@@ -1,4 +1,4 @@
-name: Start Project1 (S3 + EC2 + ALB + RDS)
+name: Start Project1 (S3+EC2+RDS)
 
 on:
   workflow_dispatch:
@@ -31,34 +31,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Validate we are using the EC2 target group (TG) on port 5001
-        shell: bash
-        run: |
-          set -euo pipefail
-          TG_ARN="${{ secrets.PROJECT1_TG_ARN }}"
-          echo "TG ARN: $TG_ARN"
-
-          aws elbv2 describe-target-groups \
-            --target-group-arns "$TG_ARN" \
-            --query 'TargetGroups[0].[TargetGroupName,TargetType,Port,Protocol,VpcId]' \
-            --output table
-
-          TYPE=$(aws elbv2 describe-target-groups \
-            --target-group-arns "$TG_ARN" \
-            --query 'TargetGroups[0].TargetType' \
-            --output text)
-
-          PORT=$(aws elbv2 describe-target-groups \
-            --target-group-arns "$TG_ARN" \
-            --query 'TargetGroups[0].Port' \
-            --output text)
-
-          if [ "$TYPE" != "instance" ] || [ "$PORT" != "${{ env.BACKEND_PORT }}" ]; then
-            echo "ERROR: PROJECT1_TG_ARN is not the EC2 TG on port ${{ env.BACKEND_PORT }}."
-            echo "Fix secrets: PROJECT1_TG_ARN must point to target group 'TG' (Instance, port 5001, brentaneal-alb)."
-            exit 1
-          fi
-
       - name: Validate target instance
         shell: bash
         run: |
@@ -85,7 +57,11 @@ jobs:
 
           if [ "$STATE" = "running" ]; then
             echo "Instance already running."
+          elif [ "$STATE" = "terminated" ]; then
+            echo "ERROR: Instance is terminated."
+            exit 1
           else
+            echo "Starting EC2 instance..."
             aws ec2 start-instances --instance-ids "$IID" >/dev/null
             echo "Start command sent."
           fi
@@ -103,8 +79,8 @@ jobs:
         run: |
           set -euo pipefail
           IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-          echo "Waiting for SSM to report Online for instance $IID..."
 
+          echo "Waiting for SSM to report Online for instance $IID..."
           for i in $(seq 1 60); do
             STATUS=$(aws ssm describe-instance-information \
               --filters "Key=InstanceIds,Values=$IID" \
@@ -125,54 +101,57 @@ jobs:
           echo " - SSM Agent is running"
           exit 1
 
-      - name: Create SSM PowerShell payload (no bash expansion, no $r)
+      - name: Create SSM PowerShell payload (safe; avoids bash $ expansion)
         shell: bash
         run: |
           set -euo pipefail
 
-          cat > ssm-params.json << 'JSON'
+          # IMPORTANT: Update this path to the folder that contains your API .csproj on the Windows instance.
+          BACKEND_DIR='C:\Apps\MyWebApi'
+
+          cat > ssm-params.json << JSON
           {
             "commands": [
               "Set-StrictMode -Version Latest",
-              "$ErrorActionPreference = 'Stop'",
+              "\$ErrorActionPreference = 'Stop'",
 
-              "$BackendDir = 'C:\\Apps\\MyWebApi'",
-              "$LogDir = 'C:\\Apps\\logs'",
-              "$OutLog = Join-Path $LogDir 'api-out.txt'",
-              "$ErrLog = Join-Path $LogDir 'api-err.txt'",
-              "$Port = 5001",
-              "$HealthPath = '/api/health'",
+              "\$BackendDir = '${BACKEND_DIR}'",
+              "\$LogDir = 'C:\\\\Apps\\\\logs'",
+              "\$OutLog = Join-Path \$LogDir 'api-out.txt'",
+              "\$ErrLog = Join-Path \$LogDir 'api-err.txt'",
+              "\$Port = ${{ env.BACKEND_PORT }}",
+              "\$HealthPath = '${{ env.HEALTH_PATH }}'",
 
-              "New-Item -ItemType Directory -Force -Path $LogDir | Out-Null",
-              "if (Test-Path $OutLog) { Remove-Item -Force $OutLog -ErrorAction SilentlyContinue }",
-              "if (Test-Path $ErrLog) { Remove-Item -Force $ErrLog -ErrorAction SilentlyContinue }",
+              "New-Item -ItemType Directory -Force -Path \$LogDir | Out-Null",
+              "if (Test-Path \$OutLog) { Remove-Item -Force \$OutLog -ErrorAction SilentlyContinue }",
+              "if (Test-Path \$ErrLog) { Remove-Item -Force \$ErrLog -ErrorAction SilentlyContinue }",
 
-              "Set-Location $BackendDir",
+              "Set-Location \$BackendDir",
               "Write-Output ('Working dir: ' + (Get-Location))",
               "Write-Output 'dotnet version:'",
               "dotnet --version",
 
-              "Write-Output 'Stopping existing dotnet processes (best-effort)'",
+              "Write-Output 'Stopping existing dotnet processes (best effort)'",
               "Get-Process dotnet -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue",
 
-              "Write-Output ('Starting: dotnet run --urls http://0.0.0.0:' + $Port)",
-              "Start-Process -WindowStyle Hidden -FilePath 'dotnet' -ArgumentList ('run --urls http://0.0.0.0:' + $Port) -RedirectStandardOutput $OutLog -RedirectStandardError $ErrLog",
+              "Write-Output ('Starting: dotnet run --urls http://0.0.0.0:' + \$Port)",
+              "Start-Process -WindowStyle Hidden -FilePath 'dotnet' -ArgumentList ('run --urls http://0.0.0.0:' + \$Port) -RedirectStandardOutput \$OutLog -RedirectStandardError \$ErrLog",
 
               "Start-Sleep -Seconds 8",
 
               "Write-Output 'Listening check:'",
-              "netstat -ano | findstr (':' + $Port)",
+              "netstat -ano | findstr (':' + \$Port)",
 
               "Write-Output 'Local health check (expect HTTP 200):'",
-              "try { (Invoke-WebRequest -UseBasicParsing ('http://localhost:' + $Port + $HealthPath)).StatusCode } catch { Write-Output 'HEALTHCHECK_FAILED'; Write-Output $_.Exception.Message; exit 2 }"
+              "try { (Invoke-WebRequest -UseBasicParsing ('http://localhost:' + \$Port + \$HealthPath)).StatusCode } catch { Write-Output 'HEALTHCHECK_FAILED'; Write-Output \$_.Exception.Message; exit 2 }"
             ]
           }
           JSON
 
           echo "Created ssm-params.json"
-          sed -n '1,120p' ssm-params.json
+          sed -n '1,160p' ssm-params.json
 
-      - name: Start Backend via SSM and wait for command result
+      - name: Start Backend Application via SSM and verify it responds
         shell: bash
         run: |
           set -euo pipefail
@@ -181,8 +160,8 @@ jobs:
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$IID" \
             --document-name "AWS-RunPowerShellScript" \
-            --comment "Start Project1 backend and verify port/health" \
             --parameters file://ssm-params.json \
+            --comment "Start Project1 Backend + verify health" \
             --query "Command.CommandId" \
             --output text)
 
@@ -213,7 +192,7 @@ jobs:
                 --query '{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}' \
                 --output json
               echo "ERROR: Backend start/verification failed."
-              echo "On the instance, check logs: C:\\Apps\\logs\\api-out.txt and api-err.txt"
+              echo "Check instance logs at: C:\\Apps\\logs\\api-out.txt and api-err.txt"
               exit 1
             fi
 
@@ -223,12 +202,20 @@ jobs:
           echo "ERROR: Timed out waiting for SSM command completion."
           exit 1
 
-      - name: Wait for EC2 target in TG to become Healthy
+      - name: Wait for EC2 target in Target Group to become Healthy (optional)
         shell: bash
         run: |
           set -euo pipefail
-          TG_ARN="${{ secrets.PROJECT1_TG_ARN }}"
+
+          # OPTIONAL: If you have an ALB Target Group for this EC2 backend, set this secret.
+          # If not set, we skip this step cleanly.
+          TG_ARN="${{ secrets.PROJECT1_TG_ARN || '' }}"
           IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+
+          if [ -z "$TG_ARN" ]; then
+            echo "PROJECT1_TG_ARN not set; skipping TG health wait."
+            exit 0
+          fi
 
           echo "Waiting for target $IID in target group to become healthy..."
           for i in $(seq 1 60); do
@@ -238,19 +225,7 @@ jobs:
               --query 'TargetHealthDescriptions[0].TargetHealth.State' \
               --output text 2>/dev/null || true)
 
-            REASON=$(aws elbv2 describe-target-health \
-              --target-group-arn "$TG_ARN" \
-              --targets Id="$IID" \
-              --query 'TargetHealthDescriptions[0].TargetHealth.Reason' \
-              --output text 2>/dev/null || true)
-
-            DESC=$(aws elbv2 describe-target-health \
-              --target-group-arn "$TG_ARN" \
-              --targets Id="$IID" \
-              --query 'TargetHealthDescriptions[0].TargetHealth.Description' \
-              --output text 2>/dev/null || true)
-
-            echo "TG health: ${STATE:-unknown} | reason: ${REASON:-n/a} | desc: ${DESC:-n/a} (attempt $i/60)"
+            echo "TG health: ${STATE:-unknown} (attempt $i/60)"
 
             if [ "$STATE" = "healthy" ]; then
               echo "Target is healthy."
@@ -261,35 +236,18 @@ jobs:
           done
 
           echo "ERROR: Target did not become healthy in time."
-          echo "Most common causes:"
-          echo "- App not listening on 0.0.0.0:5001"
-          echo "- /api/health not returning 200"
-          echo "- backend SG inbound missing TCP 5001 from ALB SG"
-          echo "- Windows Firewall blocking inbound 5001"
           exit 1
-
-      - name: Get ALB DNS
-        id: get-alb
-        shell: bash
-        run: |
-          set -euo pipefail
-          ALB_ARN="${{ secrets.PROJECT1_ALB_ARN }}"
-          DNS=$(aws elbv2 describe-load-balancers \
-            --load-balancer-arns "$ALB_ARN" \
-            --query 'LoadBalancers[0].DNSName' \
-            --output text)
-          echo "alb_dns=$DNS" >> "$GITHUB_OUTPUT"
-          echo "ALB DNS: $DNS"
 
       - name: Summary
         shell: bash
         run: |
-          echo "✅ Project1 Started"
+          echo "✅ Project1 Started Successfully!"
+          echo ""
+          echo "🟢 EC2 Instance: Running"
+          echo "🟢 Backend API: Started (verified locally on instance via SSM)"
+          echo "✅ Frontend (S3): Still available"
           echo ""
           echo "Frontend (S3 website):"
           echo "  http://nealb03-frontend-bucket-unique-2887.s3-website-us-east-1.amazonaws.com/"
           echo ""
-          echo "Backend health (through EC2 ALB):"
-          echo "  http://${{ steps.get-alb.outputs.alb_dns }}${{ env.HEALTH_PATH }}"
-          echo ""
-          echo "Started at: $(date -u)"
+          echo "⏰ Started at: $(date -u)"
