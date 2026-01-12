@@ -1,91 +1,54 @@
-name: Stop Project1 (S3+EC2+RDS)
+name: STOP - Project1 Backend (NO SSM, HTTP)
 
 on:
   workflow_dispatch:
 
+env:
+  AWS_REGION: us-east-1
+  PORT: "5001"
+  HEALTH_PATH: "/api/health"
+
 jobs:
-  stop-project1:
+  stop_backend:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Validate target instance
+      - name: Call shutdown endpoint (requires secret)
+        shell: bash
+        env:
+          STOP_URL: ${{ secrets.PROJECT1_BACKEND_STOP_URL }}
         run: |
           set -euo pipefail
-          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-          echo "Target instance id: $IID"
-          aws ec2 describe-instances \
-            --instance-ids "$IID" \
-            --query 'Reservations[0].Instances[0].[InstanceId,State.Name,Tags[?Key==`Name`].Value|[0],InstanceType,Placement.AvailabilityZone,PublicIpAddress]' \
-            --output table
-
-      - name: Stop Backend Application via SSM (best effort; only if running)
-        run: |
-          set -euo pipefail
-          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-
-          STATE=$(aws ec2 describe-instances \
-            --instance-ids "$IID" \
-            --query 'Reservations[0].Instances[0].State.Name' \
-            --output text)
-
-          echo "Instance state is: $STATE"
-
-          if [ "$STATE" != "running" ]; then
-            echo "Instance is not running; skipping SSM stop-command."
-          else
-            echo "Stopping ASP.NET Core backend..."
-            aws ssm send-command \
-              --instance-ids "$IID" \
-              --document-name "AWS-RunPowerShellScript" \
-              --parameters 'commands=["Stop-Process -Name dotnet -Force -ErrorAction SilentlyContinue", "Write-Output ''Backend stopped''"]' \
-              --comment "Stop Project1 Backend"
-            echo "Backend stop command sent via SSM."
-            sleep 10
+          if [ -z "${STOP_URL:-}" ]; then
+            echo "PROJECT1_BACKEND_STOP_URL not set; cannot stop backend without SSM/WinRM/SSH."
+            exit 1
           fi
+          curl -fsS -X POST "$STOP_URL"
 
-      - name: Stop EC2 instance (if not already stopped)
+      - name: Verify backend is down (optional)
+        shell: bash
         run: |
           set -euo pipefail
-          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-
-          STATE=$(aws ec2 describe-instances \
-            --instance-ids "$IID" \
-            --query 'Reservations[0].Instances[0].State.Name' \
-            --output text)
-
-          echo "Current state: $STATE"
-
-          if [ "$STATE" = "stopped" ]; then
-            echo "Instance already stopped."
+          HOST="${{ secrets.PROJECT1_API_PUBLIC_HOST }}"
+          if [ -z "${HOST:-}" ]; then
+            echo "PROJECT1_API_PUBLIC_HOST not set; skipping down-check."
             exit 0
           fi
 
-          if [ "$STATE" = "terminated" ]; then
-            echo "ERROR: Instance is terminated."
+          URL="http://${HOST}:${{ env.PORT }}${{ env.HEALTH_PATH }}"
+          echo "Checking: $URL"
+
+          # Expect failure; succeed if it fails
+          if curl -fsS "$URL" >/dev/null; then
+            echo "Backend still responding."
             exit 1
           fi
 
-          echo "Stopping EC2 instance..."
-          aws ec2 stop-instances --instance-ids "$IID"
-          aws ec2 wait instance-stopped --instance-ids "$IID"
-          echo "EC2 instance is now stopped."
-
-      - name: Summary
-        run: |
-          echo "✅ Project1 Stopped Successfully!"
-          echo ""
-          echo "💤 EC2 Instance: Stopped"
-          echo "💤 Backend API: Stopped"
-          echo "✅ Frontend (S3): Still available"
-          echo ""
-          echo "⏰ Stopped at: $(date)"
+          echo "Backend appears down."
