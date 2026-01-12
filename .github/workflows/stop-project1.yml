@@ -1,91 +1,199 @@
-name: Stop Project1 (S3+EC2+RDS)
+name: START - EC2 Backend (SSM)
 
 on:
   workflow_dispatch:
 
+env:
+  AWS_REGION: us-east-1
+  PORT: "5001"
+  API_DIR: 'C:\Backend01\MyWebApi'
+  LOG_DIR: 'C:\Apps\logs'
+  OUT_LOG: 'C:\Apps\logs\api-out.txt'
+  ERR_LOG: 'C:\Apps\logs\api-err.txt'
+  PID_FILE: 'C:\Apps\logs\api.pid'
+
 jobs:
-  stop-project1:
+  start_backend:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Validate target instance
+      - name: Validate instance is running
+        shell: bash
         run: |
           set -euo pipefail
           IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-          echo "Target instance id: $IID"
-          aws ec2 describe-instances \
-            --instance-ids "$IID" \
-            --query 'Reservations[0].Instances[0].[InstanceId,State.Name,Tags[?Key==`Name`].Value|[0],InstanceType,Placement.AvailabilityZone,PublicIpAddress]' \
-            --output table
-
-      - name: Stop Backend Application via SSM (best effort; only if running)
-        run: |
-          set -euo pipefail
-          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-
-          STATE=$(aws ec2 describe-instances \
-            --instance-ids "$IID" \
-            --query 'Reservations[0].Instances[0].State.Name' \
-            --output text)
-
-          echo "Instance state is: $STATE"
-
-          if [ "$STATE" != "running" ]; then
-            echo "Instance is not running; skipping SSM stop-command."
-          else
-            echo "Stopping ASP.NET Core backend..."
-            aws ssm send-command \
-              --instance-ids "$IID" \
-              --document-name "AWS-RunPowerShellScript" \
-              --parameters 'commands=["Stop-Process -Name dotnet -Force -ErrorAction SilentlyContinue", "Write-Output ''Backend stopped''"]' \
-              --comment "Stop Project1 Backend"
-            echo "Backend stop command sent via SSM."
-            sleep 10
-          fi
-
-      - name: Stop EC2 instance (if not already stopped)
-        run: |
-          set -euo pipefail
-          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-
-          STATE=$(aws ec2 describe-instances \
-            --instance-ids "$IID" \
-            --query 'Reservations[0].Instances[0].State.Name' \
-            --output text)
-
-          echo "Current state: $STATE"
-
-          if [ "$STATE" = "stopped" ]; then
-            echo "Instance already stopped."
-            exit 0
-          fi
-
-          if [ "$STATE" = "terminated" ]; then
-            echo "ERROR: Instance is terminated."
+          state=$(aws ec2 describe-instances --instance-ids "$IID" --query "Reservations[0].Instances[0].State.Name" --output text)
+          echo "Instance state: $state"
+          if [ "$state" != "running" ]; then
+            echo "Instance is not running. Start it first (or add a start step)."
             exit 1
           fi
 
-          echo "Stopping EC2 instance..."
-          aws ec2 stop-instances --instance-ids "$IID"
-          aws ec2 wait instance-stopped --instance-ids "$IID"
-          echo "EC2 instance is now stopped."
-
-      - name: Summary
+      - name: Wait for SSM to be available
+        shell: bash
         run: |
-          echo "✅ Project1 Stopped Successfully!"
-          echo ""
-          echo "💤 EC2 Instance: Stopped"
-          echo "💤 Backend API: Stopped"
-          echo "✅ Frontend (S3): Still available"
-          echo ""
-          echo "⏰ Stopped at: $(date)"
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          echo "Waiting for SSM PingStatus=Online..."
+          for i in {1..60}; do
+            ping=$(aws ssm describe-instance-information \
+              --filters Key=InstanceIds,Values="$IID" \
+              --query "InstanceInformationList[0].PingStatus" --output text 2>/dev/null || true)
+
+            if [ "$ping" = "Online" ]; then
+              echo "SSM is Online."
+              exit 0
+            fi
+
+            echo "SSM not Online yet (got: $ping). Sleeping 10s..."
+            sleep 10
+          done
+          echo "SSM never became Online. Fix SSM Agent + IAM role (AmazonSSMManagedInstanceCore) on the EC2 instance."
+          exit 1
+
+      - name: Start backend via SSM (PowerShell)
+        id: ssm_start
+        shell: bash
+        run: |
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+
+          # PowerShell script executed on the EC2 instance
+          read -r -d '' PS_SCRIPT <<'PSSCRIPT'
+          $ErrorActionPreference = "Stop"
+
+          $apiDir  = "${{ env.API_DIR }}"
+          $logDir  = "${{ env.LOG_DIR }}"
+          $outLog  = "${{ env.OUT_LOG }}"
+          $errLog  = "${{ env.ERR_LOG }}"
+          $pidFile = "${{ env.PID_FILE }}"
+          $port    = [int]"${{ env.PORT }}"
+
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+          "=== START RUN: $(Get-Date -Format o) ===" | Out-File -FilePath $outLog -Append -Encoding utf8
+          "=== START RUN: $(Get-Date -Format o) ===" | Out-File -FilePath $errLog -Append -Encoding utf8
+
+          # Kill anything holding the port (prevents silent failure)
+          try {
+            $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+            foreach ($c in $conns) {
+              if ($c.OwningProcess) {
+                "Killing PID $($c.OwningProcess) listening on port $port" | Out-File -FilePath $outLog -Append
+                Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+              }
+            }
+          } catch {
+            "Get-NetTCPConnection failed: $($_.Exception.Message)" | Out-File -FilePath $errLog -Append
+          }
+
+          # Also kill any leftover dotnet processes that might be the API (optional but helpful)
+          Get-Process dotnet -ErrorAction SilentlyContinue | ForEach-Object {
+            "dotnet process running: $($_.Id) $($_.Path)" | Out-File -FilePath $outLog -Append
+          }
+
+          if (!(Test-Path $apiDir)) {
+            throw "API directory not found: $apiDir"
+          }
+
+          Set-Location $apiDir
+
+          # Start in background; SSM must return promptly
+          $args = @("run", "--urls", "http://0.0.0.0:$port")
+
+          "Starting: dotnet $($args -join ' ')" | Out-File -FilePath $outLog -Append
+
+          $p = Start-Process -FilePath "dotnet" -ArgumentList $args `
+                -RedirectStandardOutput $outLog `
+                -RedirectStandardError  $errLog `
+                -PassThru `
+                -WindowStyle Hidden
+
+          $p.Id | Out-File -FilePath $pidFile -Encoding ascii
+          "Started PID $($p.Id)" | Out-File -FilePath $outLog -Append
+
+          # Wait up to 60s for the port to listen
+          $ok = $false
+          for ($i=0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 1
+            $listening = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+            if ($listening) { $ok = $true; break }
+            if ($p.HasExited) {
+              "Process exited early with code $($p.ExitCode)" | Out-File -FilePath $errLog -Append
+              break
+            }
+          }
+
+          if (-not $ok) {
+            "Backend did not start listening on port $port" | Out-File -FilePath $errLog -Append
+            throw "Backend failed to start (not listening on port $port). Check $outLog and $errLog."
+          }
+
+          # Optional: health check (adjust path if yours differs)
+          try {
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/health" -UseBasicParsing -TimeoutSec 10
+            "Health check status: $($resp.StatusCode)" | Out-File -FilePath $outLog -Append
+          } catch {
+            "Health check failed: $($_.Exception.Message)" | Out-File -FilePath $errLog -Append
+            throw "Health check failed. Backend may be up but health endpoint not reachable."
+          }
+
+          "Backend is up and healthy." | Out-File -FilePath $outLog -Append
+          PSSCRIPT
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$IID" \
+            --document-name "AWS-RunPowerShellScript" \
+            --parameters commands="$(python3 - <<'PY'
+import json,sys
+ps = sys.stdin.read()
+print(json.dumps([ps]))
+PY
+<<<"$PS_SCRIPT")" \
+            --comment "Start .NET backend on port 5001" \
+            --query "Command.CommandId" --output text)
+
+          echo "command_id=$CMD_ID" >> $GITHUB_OUTPUT
+          echo "SSM CommandId: $CMD_ID"
+
+          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$IID"
+
+      - name: Print SSM invocation result (stdout/stderr + status)
+        shell: bash
+        run: |
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          CMD_ID="${{ steps.ssm_start.outputs.command_id }}"
+
+          aws ssm get-command-invocation \
+            --command-id "$CMD_ID" \
+            --instance-id "$IID" \
+            --query "{Status:Status,StatusDetails:StatusDetails,ResponseCode:ResponseCode,StandardOutputContent:StandardOutputContent,StandardErrorContent:StandardErrorContent}" \
+            --output json
+
+          status=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$IID" --query "Status" --output text)
+          if [ "$status" != "Success" ]; then
+            echo "SSM command failed with status: $status"
+            exit 1
+          fi
+
+      - name: Final external check (optional) - API port reachable from outside
+        shell: bash
+        run: |
+          set -euo pipefail
+          # If your security groups/NACL allow it, this should succeed.
+          # Replace with ALB DNS if you have one.
+          API_HOST="${{ secrets.PROJECT1_API_PUBLIC_HOST }}"  # e.g. 34.192.116.54 or your ALB DNS
+          if [ -z "${API_HOST:-}" ]; then
+            echo "Skipping external check (PROJECT1_API_PUBLIC_HOST not set)."
+            exit 0
+          fi
+          echo "Checking http://$API_HOST:5001/api/health"
+          curl -fsS "http://$API_HOST:5001/api/health"
