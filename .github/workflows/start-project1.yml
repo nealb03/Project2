@@ -1,4 +1,4 @@
-name: Start Project1 (S3+EC2+RDS)
+name: Start Project1 (EC2 + Backend)
 
 on:
   workflow_dispatch:
@@ -6,20 +6,25 @@ on:
 permissions:
   contents: read
 
+env:
+  AWS_REGION: us-east-1
+  PORT: "5001"
+  FRONTEND_URL: "http://nealb03-frontend-0109-73921.s3-website-us-east-1.amazonaws.com/"
+  # OPTIONAL: if your instance has an endpoint that starts the backend, set this secret:
+  # PROJECT1_BACKEND_START_URL = http://<public-ip-or-dns>:5001/admin/start (example)
+  # Otherwise leave it unset and the workflow will only do a health check.
+
 jobs:
-  start-project1:
+  start_project1:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Validate target instance
         shell: bash
@@ -52,16 +57,15 @@ jobs:
             echo "Start command sent."
           fi
 
-      - name: Wait for EC2 instance to be running
+      - name: Wait for EC2 to be running
         shell: bash
         run: |
           set -euo pipefail
-          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-          aws ec2 wait instance-running --instance-ids "$IID"
-          echo "EC2 instance is now running."
+          aws ec2 wait instance-running --instance-ids "${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          echo "EC2 instance is running."
 
       - name: Get EC2 Public IP
-        id: get-ip
+        id: get_ip
         shell: bash
         run: |
           set -euo pipefail
@@ -70,16 +74,43 @@ jobs:
             --instance-ids "$IID" \
             --query 'Reservations[0].Instances[0].PublicIpAddress' \
             --output text)
-
           echo "Public IP: $PUBLIC_IP"
           echo "public_ip=$PUBLIC_IP" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for server boot (90 seconds)
+        shell: bash
+        run: |
+          echo "Waiting for OS/services to settle..."
+          sleep 90
+
+      - name: Optional - trigger backend start via HTTP (NO SSM)
+        shell: bash
+        env:
+          START_URL: ${{ secrets.PROJECT1_BACKEND_START_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${START_URL:-}" ]; then
+            echo "No PROJECT1_BACKEND_START_URL secret set; skipping remote start trigger."
+            exit 0
+          fi
+          echo "Calling backend start URL: $START_URL"
+          curl -fsS -X POST "$START_URL"
+
+      - name: Health check backend (if reachable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          IP="${{ steps.get_ip.outputs.public_ip }}"
+          URL="http://${IP}:${{ env.PORT }}/api/health"
+          echo "Checking: $URL"
+          curl -fsS --retry 10 --retry-delay 6 "$URL"
 
       - name: Summary
         shell: bash
         run: |
           echo "Project1 Started Successfully!"
           echo ""
-          echo "Backend API (if app/service is running on the instance): http://${{ steps.get-ip.outputs.public_ip }}:5001"
-          echo "Frontend: http://nealb03-frontend-0109-73921.s3-website-us-east-1.amazonaws.com/"
+          echo "Backend API: http://${{ steps.get_ip.outputs.public_ip }}:${{ env.PORT }}"
+          echo "Frontend: ${{ env.FRONTEND_URL }}"
           echo ""
           echo "Started at: $(date)"
