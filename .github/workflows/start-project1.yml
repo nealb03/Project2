@@ -1,116 +1,28 @@
-name: Start Project1 (EC2 + Backend)
+name: Start Project1
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
-env:
-  AWS_REGION: us-east-1
-  PORT: "5001"
-  FRONTEND_URL: "http://nealb03-frontend-0109-73921.s3-website-us-east-1.amazonaws.com/"
-  # OPTIONAL: if your instance has an endpoint that starts the backend, set this secret:
-  # PROJECT1_BACKEND_START_URL = http://<public-ip-or-dns>:5001/admin/start (example)
-  # Otherwise leave it unset and the workflow will only do a health check.
-
 jobs:
   start_project1:
     runs-on: ubuntu-latest
-
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: us-east-1
 
-      - name: Validate target instance
+      - name: Start EC2 instance
         shell: bash
         run: |
           set -euo pipefail
           IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-          echo "Target instance id: $IID"
-          aws ec2 describe-instances \
-            --instance-ids "$IID" \
-            --query 'Reservations[0].Instances[0].[InstanceId,State.Name,Tags[?Key==`Name`].Value|[0],InstanceType,Placement.AvailabilityZone,PublicIpAddress]' \
-            --output table
-
-      - name: Start EC2 instance (if needed)
-        shell: bash
-        run: |
-          set -euo pipefail
-          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-
-          STATE=$(aws ec2 describe-instances \
-            --instance-ids "$IID" \
-            --query 'Reservations[0].Instances[0].State.Name' \
-            --output text)
-
-          echo "Current state: $STATE"
-
-          if [ "$STATE" = "running" ]; then
-            echo "Instance already running."
-          else
+          state=$(aws ec2 describe-instances --instance-ids "$IID" --query "Reservations[0].Instances[0].State.Name" --output text)
+          echo "State: $state"
+          if [ "$state" != "running" ]; then
             aws ec2 start-instances --instance-ids "$IID" >/dev/null
-            echo "Start command sent."
           fi
-
-      - name: Wait for EC2 to be running
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws ec2 wait instance-running --instance-ids "${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-          echo "EC2 instance is running."
-
-      - name: Get EC2 Public IP
-        id: get_ip
-        shell: bash
-        run: |
-          set -euo pipefail
-          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-          PUBLIC_IP=$(aws ec2 describe-instances \
-            --instance-ids "$IID" \
-            --query 'Reservations[0].Instances[0].PublicIpAddress' \
-            --output text)
-          echo "Public IP: $PUBLIC_IP"
-          echo "public_ip=$PUBLIC_IP" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for server boot (90 seconds)
-        shell: bash
-        run: |
-          echo "Waiting for OS/services to settle..."
-          sleep 90
-
-      - name: Optional - trigger backend start via HTTP (NO SSM)
-        shell: bash
-        env:
-          START_URL: ${{ secrets.PROJECT1_BACKEND_START_URL }}
-        run: |
-          set -euo pipefail
-          if [ -z "${START_URL:-}" ]; then
-            echo "No PROJECT1_BACKEND_START_URL secret set; skipping remote start trigger."
-            exit 0
-          fi
-          echo "Calling backend start URL: $START_URL"
-          curl -fsS -X POST "$START_URL"
-
-      - name: Health check backend (if reachable)
-        shell: bash
-        run: |
-          set -euo pipefail
-          IP="${{ steps.get_ip.outputs.public_ip }}"
-          URL="http://${IP}:${{ env.PORT }}/api/health"
-          echo "Checking: $URL"
-          curl -fsS --retry 10 --retry-delay 6 "$URL"
-
-      - name: Summary
-        shell: bash
-        run: |
-          echo "Project1 Started Successfully!"
-          echo ""
-          echo "Backend API: http://${{ steps.get_ip.outputs.public_ip }}:${{ env.PORT }}"
-          echo "Frontend: ${{ env.FRONTEND_URL }}"
-          echo ""
-          echo "Started at: $(date)"
+          aws ec2 wait instance-running --instance-ids "$IID"
+          echo "Instance is running."
