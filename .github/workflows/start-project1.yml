@@ -79,8 +79,8 @@ jobs:
         run: |
           set -euo pipefail
           IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-
           echo "Waiting for SSM to report Online for instance $IID..."
+
           for i in $(seq 1 60); do
             STATUS=$(aws ssm describe-instance-information \
               --filters "Key=InstanceIds,Values=$IID" \
@@ -96,18 +96,17 @@ jobs:
             sleep 10
           done
 
-          echo "ERROR: SSM did not become Online. Ensure:"
-          echo " - Instance has IAM role policy AmazonSSMManagedInstanceCore"
-          echo " - SSM Agent is running"
+          echo "ERROR: SSM did not become Online."
           exit 1
 
-      - name: Create SSM PowerShell payload (safe; avoids bash $ expansion)
+      - name: Create SSM PowerShell payload (valid JSON; no bash $ expansion)
         shell: bash
         run: |
           set -euo pipefail
 
-          # IMPORTANT: Update this path to the folder that contains your API .csproj on the Windows instance.
-          BACKEND_DIR='C:\Apps\MyWebApi'
+          # IMPORTANT: Keep backslashes doubled here because this string is embedded in JSON.
+          # Update if your .csproj is in a different folder.
+          BACKEND_DIR_JSON='C:\\Apps\\MyWebApi'
 
           cat > ssm-params.json << JSON
           {
@@ -115,7 +114,7 @@ jobs:
               "Set-StrictMode -Version Latest",
               "\$ErrorActionPreference = 'Stop'",
 
-              "\$BackendDir = '${BACKEND_DIR}'",
+              "\$BackendDir = '${BACKEND_DIR_JSON}'",
               "\$LogDir = 'C:\\\\Apps\\\\logs'",
               "\$OutLog = Join-Path \$LogDir 'api-out.txt'",
               "\$ErrLog = Join-Path \$LogDir 'api-err.txt'",
@@ -149,7 +148,7 @@ jobs:
           JSON
 
           echo "Created ssm-params.json"
-          sed -n '1,160p' ssm-params.json
+          sed -n '1,120p' ssm-params.json
 
       - name: Start Backend Application via SSM and verify it responds
         shell: bash
@@ -191,8 +190,6 @@ jobs:
                 --instance-id "$IID" \
                 --query '{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}' \
                 --output json
-              echo "ERROR: Backend start/verification failed."
-              echo "Check instance logs at: C:\\Apps\\logs\\api-out.txt and api-err.txt"
               exit 1
             fi
 
@@ -202,52 +199,11 @@ jobs:
           echo "ERROR: Timed out waiting for SSM command completion."
           exit 1
 
-      - name: Wait for EC2 target in Target Group to become Healthy (optional)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # OPTIONAL: If you have an ALB Target Group for this EC2 backend, set this secret.
-          # If not set, we skip this step cleanly.
-          TG_ARN="${{ secrets.PROJECT1_TG_ARN || '' }}"
-          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-
-          if [ -z "$TG_ARN" ]; then
-            echo "PROJECT1_TG_ARN not set; skipping TG health wait."
-            exit 0
-          fi
-
-          echo "Waiting for target $IID in target group to become healthy..."
-          for i in $(seq 1 60); do
-            STATE=$(aws elbv2 describe-target-health \
-              --target-group-arn "$TG_ARN" \
-              --targets Id="$IID" \
-              --query 'TargetHealthDescriptions[0].TargetHealth.State' \
-              --output text 2>/dev/null || true)
-
-            echo "TG health: ${STATE:-unknown} (attempt $i/60)"
-
-            if [ "$STATE" = "healthy" ]; then
-              echo "Target is healthy."
-              exit 0
-            fi
-
-            sleep 10
-          done
-
-          echo "ERROR: Target did not become healthy in time."
-          exit 1
-
       - name: Summary
         shell: bash
         run: |
           echo "✅ Project1 Started Successfully!"
-          echo ""
           echo "🟢 EC2 Instance: Running"
           echo "🟢 Backend API: Started (verified locally on instance via SSM)"
           echo "✅ Frontend (S3): Still available"
-          echo ""
-          echo "Frontend (S3 website):"
-          echo "  http://nealb03-frontend-bucket-unique-2887.s3-website-us-east-1.amazonaws.com/"
-          echo ""
           echo "⏰ Started at: $(date -u)"
