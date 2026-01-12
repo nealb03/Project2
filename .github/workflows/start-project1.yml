@@ -1,182 +1,95 @@
-name: START - Project1 Backend (EC2 via SSM)
+name: Start Project1 (S3+EC2+RDS)
 
 on:
   workflow_dispatch:
 
-env:
-  AWS_REGION: us-east-1
-  INSTANCE_ID: ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
-
-  API_DIR: 'C:\Backend01\MyWebApi'
-  PORT: '5001'
-
-  LOG_DIR: 'C:\Apps\logs'
-  OUT_LOG: 'C:\Apps\logs\api-out.txt'
-  ERR_LOG: 'C:\Apps\logs\api-err.txt'
-  PID_FILE: 'C:\Apps\logs\api.pid'
-
-  # Change if your health endpoint differs, or set to empty to skip
-  HEALTH_URL: 'http://127.0.0.1:5001/api/health'
-
 jobs:
-  start:
+  start-project1:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: us-east-1
 
-      - name: Ensure EC2 is running
-        shell: bash
+      - name: Validate target instance
         run: |
           set -euo pipefail
-          state=$(aws ec2 describe-instances --instance-ids "${INSTANCE_ID}" --query "Reservations[0].Instances[0].State.Name" --output text)
-          echo "Instance state: $state"
-          test "$state" = "running"
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          echo "Target instance id: $IID"
+          aws ec2 describe-instances \
+            --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].[InstanceId,State.Name,Tags[?Key==`Name`].Value|[0],InstanceType,Placement.AvailabilityZone,PublicIpAddress]' \
+            --output table
 
-      - name: Wait for SSM Online
-        shell: bash
+      - name: Start EC2 instance (if needed)
         run: |
           set -euo pipefail
-          for i in {1..60}; do
-            ping=$(aws ssm describe-instance-information \
-              --filters Key=InstanceIds,Values="${INSTANCE_ID}" \
-              --query "InstanceInformationList[0].PingStatus" \
-              --output text 2>/dev/null || true)
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
 
-            if [ "$ping" = "Online" ]; then
-              echo "SSM is Online"
-              exit 0
-            fi
+          STATE=$(aws ec2 describe-instances \
+            --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].State.Name' \
+            --output text)
 
-            echo "SSM not Online yet (got: $ping). Sleeping 10s..."
-            sleep 10
-          done
+          echo "Current state: $STATE"
 
-          echo "SSM did not become Online. Fix SSM Agent + IAM role AmazonSSMManagedInstanceCore on the instance."
-          exit 1
+          if [ "$STATE" = "running" ]; then
+            echo "Instance already running."
+          else
+            aws ec2 start-instances --instance-ids "$IID"
+            echo "Start command sent."
+          fi
 
-      - name: Start backend (SSM PowerShell)
-        id: ssm_start
-        shell: bash
+      - name: Wait for EC2 instance to be running
         run: |
           set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          aws ec2 wait instance-running --instance-ids "$IID"
+          echo "EC2 instance is now running."
 
-          # PowerShell to run on the EC2 instance
-          PS_SCRIPT=$(cat <<'PSSCRIPT'
-          $ErrorActionPreference = "Stop"
+      - name: Wait for Windows to boot (90 seconds)
+        run: |
+          echo "Waiting for Windows Server to fully boot..."
+          sleep 90
 
-          $apiDir  = "${{ env.API_DIR }}"
-          $logDir  = "${{ env.LOG_DIR }}"
-          $outLog  = "${{ env.OUT_LOG }}"
-          $errLog  = "${{ env.ERR_LOG }}"
-          $pidFile = "${{ env.PID_FILE }}"
-          $port    = [int]"${{ env.PORT }}"
-          $health  = "${{ env.HEALTH_URL }}"
+      - name: Start Backend Application via SSM
+        run: |
+          set -euo pipefail
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          echo "Starting ASP.NET Core backend via SSM on $IID..."
 
-          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-
-          "=== START RUN: $(Get-Date -Format o) ===" | Out-File -FilePath $outLog -Append -Encoding utf8
-          "=== START RUN: $(Get-Date -Format o) ===" | Out-File -FilePath $errLog -Append -Encoding utf8
-
-          if (!(Test-Path $apiDir)) {
-            throw "API directory not found: $apiDir"
-          }
-
-          # Kill anything already listening on the port
-          try {
-            $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-            foreach ($c in $conns) {
-              if ($c.OwningProcess) {
-                "Killing PID $($c.OwningProcess) listening on port $port" | Out-File -FilePath $outLog -Append
-                Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
-              }
-            }
-          } catch {
-            "Get-NetTCPConnection failed: $($_.Exception.Message)" | Out-File -FilePath $errLog -Append
-          }
-
-          Set-Location $apiDir
-
-          # Start dotnet in the background so SSM can return
-          $args = @("run","--urls","http://0.0.0.0:$port")
-
-          "Starting: dotnet $($args -join ' ')" | Out-File -FilePath $outLog -Append
-
-          $p = Start-Process -FilePath "dotnet" -ArgumentList $args `
-                -RedirectStandardOutput $outLog `
-                -RedirectStandardError  $errLog `
-                -PassThru `
-                -WindowStyle Hidden
-
-          $p.Id | Out-File -FilePath $pidFile -Encoding ascii
-          "Started PID $($p.Id)" | Out-File -FilePath $outLog -Append
-
-          # Wait up to 60s for the service to listen
-          $ok = $false
-          for ($i=0; $i -lt 60; $i++) {
-            Start-Sleep -Seconds 1
-            $listening = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-            if ($listening) { $ok = $true; break }
-            if ($p.HasExited) {
-              "Process exited early with code $($p.ExitCode)" | Out-File -FilePath $errLog -Append
-              break
-            }
-          }
-
-          if (-not $ok) {
-            throw "Backend failed to start (not listening on port $port). Check $outLog and $errLog."
-          }
-
-          # Optional health check
-          if ($health -and $health.Trim().Length -gt 0) {
-            try {
-              $resp = Invoke-WebRequest -Uri $health -UseBasicParsing -TimeoutSec 10
-              "Health status: $($resp.StatusCode)" | Out-File -FilePath $outLog -Append
-            } catch {
-              "Health check failed: $($_.Exception.Message)" | Out-File -FilePath $errLog -Append
-              throw "Backend is listening but health check failed: $health"
-            }
-          }
-
-          "START OK" | Out-File -FilePath $outLog -Append
-          PSSCRIPT
-          )
-
-          # Send command
-          CMD_ID=$(aws ssm send-command \
-            --instance-ids "${INSTANCE_ID}" \
+          aws ssm send-command \
+            --instance-ids "$IID" \
             --document-name "AWS-RunPowerShellScript" \
-            --comment "Start Project1 backend" \
-            --parameters commands="$(python3 - <<'PY'
-import json,os,sys
-ps = os.environ["PS_SCRIPT"]
-print(json.dumps([ps]))
-PY
-)" \
-            --query "Command.CommandId" --output text)
+            --parameters 'commands=["cd C:\\Backend01\\MyWebApi", "Start-Process powershell -WindowStyle Hidden -ArgumentList ''-Command'',''dotnet run --urls http://0.0.0.0:5001''"]' \
+            --comment "Start Project1 Backend"
 
-          echo "command_id=$CMD_ID" >> $GITHUB_OUTPUT
-          echo "SSM CommandId: $CMD_ID"
+          echo "Backend start command sent via SSM."
 
-          # Wait and then fail if not success
-          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "${INSTANCE_ID}"
-
-      - name: Show SSM result + fail if not Success
-        shell: bash
+      - name: Get EC2 Public IP
+        id: get-ip
         run: |
           set -euo pipefail
-          CMD_ID="${{ steps.ssm_start.outputs.command_id }}"
+          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+          echo "Public IP: $PUBLIC_IP"
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
 
-          aws ssm get-command-invocation \
-            --command-id "$CMD_ID" \
-            --instance-id "${INSTANCE_ID}" \
-            --output json
-
-          status=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "${INSTANCE_ID}" --query "Status" --output text)
-          echo "SSM status: $status"
-          test "$status" = "Success"
+      - name: Summary
+        run: |
+          echo "✅ Project1 Started Successfully!"
+          echo ""
+          echo "📍 Backend API: http://${{ steps.get-ip.outputs.public_ip }}:5001"
+          echo "📍 Frontend: http://nealb03-frontend-0109-73921.s3-website-us-east-1.amazonaws.com/"
+          echo ""
+          echo "⏰ Started at: $(date)"
