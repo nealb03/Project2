@@ -3,22 +3,26 @@ name: Start Project1 (S3+EC2+RDS)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   start-project1:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
       - name: Validate target instance
+        shell: bash
         run: |
           set -euo pipefail
           IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
@@ -29,6 +33,7 @@ jobs:
             --output table
 
       - name: Start EC2 instance (if needed)
+        shell: bash
         run: |
           set -euo pipefail
           IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
@@ -43,38 +48,21 @@ jobs:
           if [ "$STATE" = "running" ]; then
             echo "Instance already running."
           else
-            aws ec2 start-instances --instance-ids "$IID"
+            aws ec2 start-instances --instance-ids "$IID" >/dev/null
             echo "Start command sent."
           fi
 
       - name: Wait for EC2 instance to be running
+        shell: bash
         run: |
           set -euo pipefail
           IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
           aws ec2 wait instance-running --instance-ids "$IID"
           echo "EC2 instance is now running."
 
-      - name: Wait for Windows to boot (90 seconds)
-        run: |
-          echo "Waiting for Windows Server to fully boot..."
-          sleep 90
-
-      - name: Start Backend Application via SSM
-        run: |
-          set -euo pipefail
-          IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
-          echo "Starting ASP.NET Core backend via SSM on $IID..."
-
-          aws ssm send-command \
-            --instance-ids "$IID" \
-            --document-name "AWS-RunPowerShellScript" \
-            --parameters 'commands=["cd C:\\Backend01\\MyWebApi", "Start-Process powershell -WindowStyle Hidden -ArgumentList ''-Command'',''dotnet run --urls http://0.0.0.0:5001''"]' \
-            --comment "Start Project1 Backend"
-
-          echo "Backend start command sent via SSM."
-
       - name: Get EC2 Public IP
         id: get-ip
+        shell: bash
         run: |
           set -euo pipefail
           IID="${{ secrets.PROJECT1_EC2_INSTANCE_ID }}"
@@ -82,14 +70,16 @@ jobs:
             --instance-ids "$IID" \
             --query 'Reservations[0].Instances[0].PublicIpAddress' \
             --output text)
+
           echo "Public IP: $PUBLIC_IP"
-          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          echo "public_ip=$PUBLIC_IP" >> "$GITHUB_OUTPUT"
 
       - name: Summary
+        shell: bash
         run: |
-          echo "✅ Project1 Started Successfully!"
+          echo "Project1 Started Successfully!"
           echo ""
-          echo "📍 Backend API: http://${{ steps.get-ip.outputs.public_ip }}:5001"
-          echo "📍 Frontend: http://nealb03-frontend-0109-73921.s3-website-us-east-1.amazonaws.com/"
+          echo "Backend API (if app/service is running on the instance): http://${{ steps.get-ip.outputs.public_ip }}:5001"
+          echo "Frontend: http://nealb03-frontend-0109-73921.s3-website-us-east-1.amazonaws.com/"
           echo ""
-          echo "⏰ Started at: $(date)"
+          echo "Started at: $(date)"
