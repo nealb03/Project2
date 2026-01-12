@@ -33,14 +33,13 @@ jobs:
 
           echo "Instance state: $state"
 
-          if [ "$state" = "running" ]; then
-            echo "Instance already running."
-          else
+          if [ "$state" != "running" ]; then
             echo "Starting instance..."
             aws ec2 start-instances --instance-ids "$IID" >/dev/null
             aws ec2 wait instance-running --instance-ids "$IID"
-            echo "Instance is running."
           fi
+
+          echo "Instance is running."
 
       - name: Wait for backend health endpoint (optional)
         shell: bash
