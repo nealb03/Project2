@@ -7,17 +7,6 @@ env:
   AWS_REGION: us-east-1
   INSTANCE_ID: ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
 
-  # Windows path where your API project (.csproj) lives
-  API_DIR: 'C:\Backend01\MyWebApi'
-
-  # Backend port
-  PORT: "5001"
-
-  # Log + pid files on the EC2 instance
-  OUT_LOG: 'C:\Apps\logs\api-out.txt'
-  ERR_LOG: 'C:\Apps\logs\api-err.txt'
-  PID_FILE: 'C:\Apps\logs\api.pid'
-
 jobs:
   start:
     runs-on: ubuntu-latest
@@ -41,7 +30,6 @@ jobs:
             aws ec2 wait instance-running --instance-ids "${INSTANCE_ID}"
           fi
 
-      # Default ~60 seconds total (12*5s). Change to {1..4} for ~20 seconds total.
       - name: Wait for SSM Online (max ~60s)
         shell: bash
         run: |
@@ -51,16 +39,12 @@ jobs:
               --filters Key=InstanceIds,Values="${INSTANCE_ID}" \
               --query "InstanceInformationList[0].PingStatus" \
               --output text 2>/dev/null || true)
-
             echo "SSM PingStatus: ${ping:-<empty>}"
             if [ "$ping" = "Online" ]; then
-              echo "SSM is Online"
               exit 0
             fi
-
             sleep 5
           done
-
           echo "SSM did not become Online within the timeout."
           exit 1
 
@@ -70,6 +54,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # IMPORTANT: JSON requires backslashes to be escaped -> \\.
+          # So we hardcode Windows paths inside the JSON as C:\\...
           CMD_ID=$(aws ssm send-command \
             --instance-ids "${INSTANCE_ID}" \
             --document-name "AWS-RunPowerShellScript" \
@@ -77,11 +63,11 @@ jobs:
             --parameters '{
               "commands": [
                 "$ErrorActionPreference = \"Stop\"",
-                "$apiDir  = \"${{ env.API_DIR }}\"",
-                "$port    = \"${{ env.PORT }}\"",
-                "$outLog  = \"${{ env.OUT_LOG }}\"",
-                "$errLog  = \"${{ env.ERR_LOG }}\"",
-                "$pidFile = \"${{ env.PID_FILE }}\"",
+                "$apiDir  = \"C:\\\\Backend01\\\\MyWebApi\"",
+                "$port    = \"5001\"",
+                "$outLog  = \"C:\\\\Apps\\\\logs\\\\api-out.txt\"",
+                "$errLog  = \"C:\\\\Apps\\\\logs\\\\api-err.txt\"",
+                "$pidFile = \"C:\\\\Apps\\\\logs\\\\api.pid\"",
 
                 "New-Item -ItemType Directory -Force -Path (Split-Path $outLog) | Out-Null",
                 "\"----- START $(Get-Date -Format o) -----\" | Out-File -FilePath $outLog -Append",
@@ -89,7 +75,6 @@ jobs:
 
                 "if (!(Test-Path $apiDir)) { throw \"API_DIR not found: $apiDir\" }",
 
-                "# If already running, exit cleanly",
                 "if (Test-Path $pidFile) {",
                 "  try {",
                 "    $pid = (Get-Content $pidFile -ErrorAction Stop)",
@@ -100,7 +85,6 @@ jobs:
                 "  } catch {}",
                 "}",
 
-                "# Start exactly like you do manually, but in background with logs redirected",
                 "$cmd = \"cd /d `\"$apiDir`\" && dotnet run --urls http://0.0.0.0:$port 1>> `\"$outLog`\" 2>> `\"$errLog`\"\"",
                 "\"CMD: $cmd\" | Out-File -FilePath $outLog -Append",
 
@@ -124,31 +108,3 @@ jobs:
             --instance-id "${INSTANCE_ID}" \
             --query "{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}" \
             --output json
-
-      - name: Tail backend logs (from EC2)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          CMD_ID=$(aws ssm send-command \
-            --instance-ids "${INSTANCE_ID}" \
-            --document-name "AWS-RunPowerShellScript" \
-            --comment "Tail backend logs" \
-            --parameters '{
-              "commands": [
-                "$outLog = \"${{ env.OUT_LOG }}\"",
-                "$errLog = \"${{ env.ERR_LOG }}\"",
-                "\"===== OUT_LOG (tail 80): $outLog =====\"",
-                "if (Test-Path $outLog) { Get-Content $outLog -Tail 80 } else { \"OUT_LOG not found\" }",
-                "\"===== ERR_LOG (tail 80): $errLog =====\"",
-                "if (Test-Path $errLog) { Get-Content $errLog -Tail 80 } else { \"ERR_LOG not found\" }"
-              ]
-            }' \
-            --query "Command.CommandId" --output text)
-
-          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "${INSTANCE_ID}"
-
-          aws ssm get-command-invocation \
-            --command-id "$CMD_ID" \
-            --instance-id "${INSTANCE_ID}" \
-            --query "StandardOutputContent" --output text
