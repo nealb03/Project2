@@ -25,11 +25,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws--credentials@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC (PROD)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region: ${{ inputs.aws_region }}
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
+          aws-region: ${{ inputs.aws_region }}
 
       - name: Start EC2 and wait until running
         shell: bash
@@ -72,15 +75,18 @@ jobs:
           $ErrorActionPreference = "Stop"
           $port = "__PORT__"
 
+          # From your manual run / screenshot:
           $apiDir = "C:\Backend01\MyWebApi"
           if (!(Test-Path $apiDir)) { throw "API_DIR not found: $apiDir" }
 
+          # If your csproj name differs, change it here:
           $csproj = Join-Path $apiDir "MyWebApi.csproj"
           if (!(Test-Path $csproj)) { throw "CSPROJ not found: $csproj" }
 
           $logDir = "C:\Apps\logs"
           New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
+          # Stop old PID if it exists
           $pidFile = Join-Path $logDir "api.pid"
           if (Test-Path $pidFile) {
             try {
@@ -94,6 +100,7 @@ jobs:
           $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
           $errLog = Join-Path $logDir ("api-err-" + $ts + ".txt")
 
+          # Find dotnet reliably (SSM runs as SYSTEM)
           $dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
           if (!$dotnet) {
             $fallback = "C:\Program Files\dotnet\dotnet.exe"
@@ -106,6 +113,7 @@ jobs:
             "--urls", "http://0.0.0.0:$port"
           ) -join " "
 
+          # Start detached and log stdout/stderr to files
           $p = Start-Process -FilePath $dotnet `
             -ArgumentList $argList `
             -WorkingDirectory $apiDir `
@@ -115,7 +123,7 @@ jobs:
             -PassThru
 
           $p.Id | Out-File -FilePath $pidFile -Force
-          "Started PID=$($p.Id) on port $port" | Out-File -FilePath $outLog -Append
+          "Started PID=$($p.Id) on port $port. Out=$outLog Err=$errLog" | Out-File -FilePath $outLog -Append
           PS1
 
           sed -i "s/__PORT__/${PORT}/g" start-backend.ps1
