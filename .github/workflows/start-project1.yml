@@ -1,4 +1,4 @@
-name: START - Project1 Backend (EC2 + SSM, starts BE)
+name: START - Project1 Backend (EC2 + SSM)
 
 on:
   workflow_dispatch:
@@ -9,9 +9,11 @@ env:
 
   API_DIR: 'C:\Backend01\MyWebApi'
   PORT: "5001"
-  OUT_LOG: 'C:\Apps\logs\api-out.txt'
-  ERR_LOG: 'C:\Apps\logs\api-err.txt'
+
+  # Directory only; actual log filenames will be timestamped to avoid lock contention
+  LOG_DIR: 'C:\Apps\logs'
   PID_FILE: 'C:\Apps\logs\api.pid'
+  CURRENT_LOGS_FILE: 'C:\Apps\logs\api-current-logs.txt'
 
 jobs:
   start:
@@ -54,7 +56,7 @@ jobs:
           echo "SSM did not become Online within timeout."
           exit 1
 
-      - name: Start backend via SSM (kill prior PID, validate dotnet, start, verify)
+      - name: Start backend via SSM (rotate logs, kill prior PID, start + verify)
         id: ssm_start
         shell: bash
         run: |
@@ -63,68 +65,78 @@ jobs:
           PARAMS_JSON=$(jq -n \
             --arg apiDir "$API_DIR" \
             --arg port "$PORT" \
-            --arg outLog "$OUT_LOG" \
-            --arg errLog "$ERR_LOG" \
+            --arg logDir "$LOG_DIR" \
             --arg pidFile "$PID_FILE" \
+            --arg currentLogs "$CURRENT_LOGS_FILE" \
             '{
               commands: [
                 "$ErrorActionPreference = \"Stop\"",
-                ("$apiDir  = \"" + $apiDir + "\""),
-                ("$port    = \"" + $port + "\""),
-                ("$outLog  = \"" + $outLog + "\""),
-                ("$errLog  = \"" + $errLog + "\""),
+                ("$apiDir = \"" + $apiDir + "\""),
+                ("$port   = \"" + $port + "\""),
+                ("$logDir = \"" + $logDir + "\""),
                 ("$pidFile = \"" + $pidFile + "\""),
+                ("$currentLogs = \"" + $currentLogs + "\""),
 
-                "New-Item -ItemType Directory -Force -Path (Split-Path $outLog) | Out-Null",
-                "\"----- START $(Get-Date -Format o) -----\" | Out-File -FilePath $outLog -Append",
+                "# Ensure log dir exists",
+                "New-Item -ItemType Directory -Force -Path $logDir | Out-Null",
 
-                "# Validate API dir",
-                "if (!(Test-Path $apiDir)) { throw \"API_DIR not found: $apiDir\" }",
-
-                "# Validate dotnet exists (PATH can be different in SSM sessions)",
-                "$dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue)",
-                "if (-not $dotnet) {",
-                "  $candidates = @(",
-                "    \"C:\\\\Program Files\\\\dotnet\\\\dotnet.exe\",",
-                "    \"C:\\\\Program Files (x86)\\\\dotnet\\\\dotnet.exe\"",
-                "  )",
-                "  foreach ($c in $candidates) { if (Test-Path $c) { $dotnet = $c; break } }",
-                "  if (-not $dotnet) { throw \"dotnet not found in PATH and not in default install locations\" }",
-                "} else { $dotnet = $dotnet.Source }",
-                "\"dotnet: $dotnet\" | Out-File -FilePath $outLog -Append",
-
-                "# If PID file exists and process is alive, stop it first",
+                "# Stop existing process FIRST (prevents it holding old log handles)",
                 "if (Test-Path $pidFile) {",
                 "  try {",
                 "    $oldPid = (Get-Content $pidFile -ErrorAction Stop)",
                 "    if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {",
-                "      \"Stopping existing pid=$oldPid\" | Out-File -FilePath $outLog -Append",
                 "      Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue",
                 "      Start-Sleep -Seconds 2",
                 "    }",
                 "  } catch {}",
                 "}",
 
-                "# Start backend (background) with logs redirected",
+                "# Validate API dir",
+                "if (!(Test-Path $apiDir)) { throw \"API_DIR not found: $apiDir\" }",
+
+                "# Find dotnet (PATH in SSM can differ)",
+                "$dotnetCmd = (Get-Command dotnet -ErrorAction SilentlyContinue)",
+                "if ($dotnetCmd) { $dotnet = $dotnetCmd.Source } else {",
+                "  $candidates = @(",
+                "    \"C:\\\\Program Files\\\\dotnet\\\\dotnet.exe\",",
+                "    \"C:\\\\Program Files (x86)\\\\dotnet\\\\dotnet.exe\"",
+                "  )",
+                "  $dotnet = $null",
+                "  foreach ($c in $candidates) { if (Test-Path $c) { $dotnet = $c; break } }",
+                "  if (-not $dotnet) { throw \"dotnet not found\" }",
+                "}",
+
+                "# Create unique log files per run to avoid 'file is being used' locks",
+                "$ts = Get-Date -Format \"yyyyMMdd-HHmmss\"",
+                "$outLog = Join-Path $logDir (\"api-out-\" + $ts + \".txt\")",
+                "$errLog = Join-Path $logDir (\"api-err-\" + $ts + \".txt\")",
+                "\"OUT_LOG=$outLog\" | Out-File -FilePath $currentLogs -Force",
+                "\"ERR_LOG=$errLog\" | Out-File -FilePath $currentLogs -Append",
+
+                "\"----- START $ts -----\" | Out-File -FilePath $outLog -Append",
+                "\"dotnet=$dotnet\" | Out-File -FilePath $outLog -Append",
+                "\"API_DIR=$apiDir PORT=$port\" | Out-File -FilePath $outLog -Append",
+
+                "# Start backend in background with redirected logs",
                 "$cmd = \"cd /d `\"$apiDir`\" && `\"$dotnet`\" run --urls http://0.0.0.0:$port 1>> `\"$outLog`\" 2>> `\"$errLog`\"\"",
                 "\"CMD: $cmd\" | Out-File -FilePath $outLog -Append",
                 "$p = Start-Process -FilePath \"cmd.exe\" -ArgumentList \"/c\", $cmd -WindowStyle Hidden -PassThru",
                 "$p.Id | Out-File -FilePath $pidFile -Force",
                 "\"Started pid=$($p.Id)\" | Out-File -FilePath $outLog -Append",
 
-                "# Quick verification: process still exists after a short delay",
+                "# Verify it stays alive briefly",
                 "Start-Sleep -Seconds 3",
                 "if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) {",
-                "  \"Process exited immediately. Showing last ERR log lines:\" | Out-File -FilePath $outLog -Append",
-                "  if (Test-Path $errLog) { Get-Content $errLog -Tail 80 | Out-File -FilePath $outLog -Append }",
+                "  \"Process exited immediately; dumping err tail\" | Out-File -FilePath $outLog -Append",
+                "  if (Test-Path $errLog) { Get-Content $errLog -Tail 120 | Out-File -FilePath $outLog -Append }",
                 "  throw \"Backend process did not stay running\"",
                 "}",
 
-                "# Optional: show listening ports (best effort)",
+                "# Optional: confirm something is listening on the port (best effort)",
                 "try {",
-                "  $listening = netstat -ano | Select-String (\":\" + $port + \" \")",
+                "  $hit = netstat -ano | Select-String (\":\" + $port + \" \")",
                 "  \"Listening check:\" | Out-File -FilePath $outLog -Append",
-                "  $listening | ForEach-Object { $_.ToString() } | Out-File -FilePath $outLog -Append",
+                "  $hit | ForEach-Object { $_.ToString() } | Out-File -FilePath $outLog -Append",
                 "} catch {}"
               ]
             }')
@@ -138,7 +150,6 @@ jobs:
 
           echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
 
-          # Wait but always print invocation output
           aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "${INSTANCE_ID}" || true
 
           aws ssm get-command-invocation \
