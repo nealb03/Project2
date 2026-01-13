@@ -7,10 +7,15 @@ env:
   AWS_REGION: us-east-1
   INSTANCE_ID: ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
 
+  API_DIR: 'C:\Backend01\MyWebApi'
+  PORT: "5001"
+  OUT_LOG: 'C:\Apps\logs\api-out.txt'
+  ERR_LOG: 'C:\Apps\logs\api-err.txt'
+  PID_FILE: 'C:\Apps\logs\api.pid'
+
 jobs:
   start:
     runs-on: ubuntu-latest
-
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -54,45 +59,58 @@ jobs:
         run: |
           set -euo pipefail
 
-          # IMPORTANT: JSON requires backslashes to be escaped -> \\.
-          # So we hardcode Windows paths inside the JSON as C:\\...
+          # Escape backslashes for JSON (C:\Path -> C:\\Path)
+          API_DIR_ESC=${API_DIR//\\/\\\\}
+          OUT_LOG_ESC=${OUT_LOG//\\/\\\\}
+          ERR_LOG_ESC=${ERR_LOG//\\/\\\\}
+          PID_FILE_ESC=${PID_FILE//\\/\\\\}
+
+          # Build JSON parameters safely using a heredoc
+          PARAMS=$(cat <<EOF
+          {
+            "commands": [
+              "\$ErrorActionPreference = \\"Stop\\"",
+              "\$apiDir  = \\"$API_DIR_ESC\\"",
+              "\$port    = \\"$PORT\\"",
+              "\$outLog  = \\"$OUT_LOG_ESC\\"",
+              "\$errLog  = \\"$ERR_LOG_ESC\\"",
+              "\$pidFile = \\"$PID_FILE_ESC\\"",
+
+              "New-Item -ItemType Directory -Force -Path (Split-Path \$outLog) | Out-Null",
+              "\\"----- START \$(Get-Date -Format o) -----\\" | Out-File -FilePath \$outLog -Append",
+              "\\"API_DIR=\$apiDir PORT=\$port\\" | Out-File -FilePath \$outLog -Append",
+
+              "if (!(Test-Path \$apiDir)) { throw \\"API_DIR not found: \$apiDir\\" }",
+
+              "if (Test-Path \$pidFile) {",
+              "  try {",
+              "    \$pid = (Get-Content \$pidFile -ErrorAction Stop)",
+              "    if (\$pid -and (Get-Process -Id \$pid -ErrorAction SilentlyContinue)) {",
+              "      \\"Already running pid=\$pid\\" | Out-File -FilePath \$outLog -Append",
+              "      exit 0",
+              "    }",
+              "  } catch {}",
+              "}",
+
+              "\$cmd = \\"cd /d `\\"\\$apiDir`\\" && dotnet run --urls http://0.0.0.0:\\$port 1>> `\\"\\$outLog`\\" 2>> `\\"\\$errLog`\\"\\"",
+              "\\"CMD: \$cmd\\" | Out-File -FilePath \$outLog -Append",
+
+              "\$p = Start-Process -FilePath \\"cmd.exe\\" -ArgumentList \\"/c\\", \$cmd -WindowStyle Hidden -PassThru",
+              "\$p.Id | Out-File -FilePath \$pidFile -Force",
+              "\\"Started pid=\$((\$p).Id)\\" | Out-File -FilePath \$outLog -Append"
+            ]
+          }
+          EOF
+          )
+
+          echo "SSM parameters JSON (sanitized):"
+          echo "$PARAMS" | sed 's/[A-Za-z]:\\\\[^"]*/<WIN_PATH>/g' || true
+
           CMD_ID=$(aws ssm send-command \
             --instance-ids "${INSTANCE_ID}" \
             --document-name "AWS-RunPowerShellScript" \
             --comment "Start Project1 backend via dotnet run (SSM)" \
-            --parameters '{
-              "commands": [
-                "$ErrorActionPreference = \"Stop\"",
-                "$apiDir  = \"C:\\\\Backend01\\\\MyWebApi\"",
-                "$port    = \"5001\"",
-                "$outLog  = \"C:\\\\Apps\\\\logs\\\\api-out.txt\"",
-                "$errLog  = \"C:\\\\Apps\\\\logs\\\\api-err.txt\"",
-                "$pidFile = \"C:\\\\Apps\\\\logs\\\\api.pid\"",
-
-                "New-Item -ItemType Directory -Force -Path (Split-Path $outLog) | Out-Null",
-                "\"----- START $(Get-Date -Format o) -----\" | Out-File -FilePath $outLog -Append",
-                "\"API_DIR=$apiDir PORT=$port\" | Out-File -FilePath $outLog -Append",
-
-                "if (!(Test-Path $apiDir)) { throw \"API_DIR not found: $apiDir\" }",
-
-                "if (Test-Path $pidFile) {",
-                "  try {",
-                "    $pid = (Get-Content $pidFile -ErrorAction Stop)",
-                "    if ($pid -and (Get-Process -Id $pid -ErrorAction SilentlyContinue)) {",
-                "      \"Already running pid=$pid\" | Out-File -FilePath $outLog -Append",
-                "      exit 0",
-                "    }",
-                "  } catch {}",
-                "}",
-
-                "$cmd = \"cd /d `\"$apiDir`\" && dotnet run --urls http://0.0.0.0:$port 1>> `\"$outLog`\" 2>> `\"$errLog`\"\"",
-                "\"CMD: $cmd\" | Out-File -FilePath $outLog -Append",
-
-                "$p = Start-Process -FilePath \"cmd.exe\" -ArgumentList \"/c\", $cmd -WindowStyle Hidden -PassThru",
-                "$p.Id | Out-File -FilePath $pidFile -Force",
-                "\"Started pid=$($p.Id)\" | Out-File -FilePath $outLog -Append"
-              ]
-            }' \
+            --parameters "$PARAMS" \
             --query "Command.CommandId" --output text)
 
           echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
