@@ -1,4 +1,4 @@
-name: START - Project1 Backend (EC2 + SSM)
+name: START - Project1 Backend (EC2 via SSM, dotnet run)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ env:
   INSTANCE_ID: ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
 
   API_DIR: 'C:\Backend01\MyWebApi'
-  DLL_NAME: 'MyWebApi.dll'
   PORT: "5001"
 
   LOG_DIR: 'C:\Apps\logs'
@@ -16,6 +15,7 @@ env:
   ERR_LOG: 'C:\Apps\logs\api-err.txt'
   PID_FILE: 'C:\Apps\logs\api.pid'
 
+  # Optional health check on the instance itself
   HEALTH_URL: 'http://127.0.0.1:5001/api/health'
 
 jobs:
@@ -60,30 +60,32 @@ jobs:
             sleep 10
           done
 
-          echo "SSM did not become Online. Ensure SSM Agent is installed/running and instance role has AmazonSSMManagedInstanceCore."
+          echo "SSM did not become Online. Ensure SSM Agent is running and instance role has AmazonSSMManagedInstanceCore."
           exit 1
 
-      - name: Start backend via SSM
+      - name: Start backend via SSM (dotnet run)
         id: ssm_start
         shell: bash
         run: |
           set -euo pipefail
 
-          # PowerShell script (do NOT use heredoc-within-aws-cli; we'll base64 encode)
           PS_SCRIPT=$(cat <<'EOF'
           $ErrorActionPreference = "Stop"
 
           $apiDir  = "${env:API_DIR}"
-          $dllName = "${env:DLL_NAME}"
+          $port    = "${env:PORT}"
           $outLog  = "${env:OUT_LOG}"
           $errLog  = "${env:ERR_LOG}"
           $pidFile = "${env:PID_FILE}"
           $health  = "${env:HEALTH_URL}"
 
           New-Item -ItemType Directory -Force -Path (Split-Path $outLog) | Out-Null
-
           "----- START $(Get-Date -Format o) -----" | Out-File -FilePath $outLog -Append
-          "apiDir=$apiDir dll=$dllName" | Out-File -FilePath $outLog -Append
+          "apiDir=$apiDir port=$port" | Out-File -FilePath $outLog -Append
+
+          if (!(Test-Path $apiDir)) {
+            throw "API_DIR not found: $apiDir"
+          }
 
           # If already running, exit cleanly
           if (Test-Path $pidFile) {
@@ -96,28 +98,24 @@ jobs:
             } catch {}
           }
 
-          # Start dotnet process
-          $dllPath = Join-Path $apiDir $dllName
-          if (!(Test-Path $dllPath)) {
-            throw "DLL not found: $dllPath"
-          }
+          # Start 'dotnet run' the same way you do manually, but in background
+          # Use cmd.exe so quoting is predictable, and redirect stdout/stderr to files.
+          $cmd = "cd /d `"$apiDir`" && dotnet run --urls http://0.0.0.0:$port 1>> `"$outLog`" 2>> `"$errLog`""
+          "Starting with cmd: $cmd" | Out-File -FilePath $outLog -Append
 
-          $p = Start-Process -FilePath "dotnet" -ArgumentList "`"$dllPath`"" -WorkingDirectory $apiDir -PassThru -WindowStyle Hidden
+          $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd -WindowStyle Hidden -PassThru
           $p.Id | Out-File -FilePath $pidFile -Force
-
           "Started pid=$($p.Id)" | Out-File -FilePath $outLog -Append
 
-          # Optional health check (local on instance)
+          # Optional local health check on the instance
           if ($health -and $health.Trim().Length -gt 0) {
             for ($i=0; $i -lt 60; $i++) {
               try {
                 $r = Invoke-WebRequest -UseBasicParsing -Uri $health -TimeoutSec 3
-                if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) {
-                  "Health OK: $($r.StatusCode)" | Out-File -FilePath $outLog -Append
-                  exit 0
-                }
+                "Health status: $($r.StatusCode)" | Out-File -FilePath $outLog -Append
+                exit 0
               } catch {
-                "Health not ready yet: $($_.Exception.Message)" | Out-File -FilePath $errLog -Append
+                "Health not ready: $($_.Exception.Message)" | Out-File -FilePath $errLog -Append
               }
               Start-Sleep -Seconds 5
             }
@@ -128,17 +126,13 @@ jobs:
           EOF
           )
 
-          # Base64 encode the script for safe transport
           PS_B64=$(printf "%s" "$PS_SCRIPT" | base64 -w0)
-
-          # Build ONE PowerShell command that decodes + runs the script
-          # Note: AWS-RunPowerShellScript takes an array of commands; we pass a single command line.
           RUN="powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"\$b64='$PS_B64'; \$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(\$b64)); iex \$s\""
 
           CMD_ID=$(aws ssm send-command \
             --instance-ids "${INSTANCE_ID}" \
             --document-name "AWS-RunPowerShellScript" \
-            --comment "Start Project1 backend" \
+            --comment "Start Project1 backend via dotnet run" \
             --parameters "commands=$RUN" \
             --query "Command.CommandId" --output text)
 
