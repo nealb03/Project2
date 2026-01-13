@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       port:
-        description: "Port for the API (dotnet --urls)"
+        description: "Port for the API"
         required: false
         default: "5001"
-      project_path:
-        description: "Path to the .csproj relative to repository root"
+      csproj:
+        description: "CSProj path relative to repo root"
         required: false
         default: "App1-S3-EC2-RDS/Backend/MyWebApi/MyWebApi.csproj"
 
@@ -20,43 +20,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify project exists
+      - name: Print workspace + find csproj (debug)
         shell: pwsh
-        env:
-          PROJECT_PATH: ${{ inputs.project_path }}
         run: |
           $ErrorActionPreference = "Stop"
+          Write-Host "GITHUB_WORKSPACE = $env:GITHUB_WORKSPACE"
+          Write-Host "Top-level:"
+          Get-ChildItem -Path $env:GITHUB_WORKSPACE -Force | Format-Table -AutoSize | Out-String | Write-Host
+          Write-Host "All *.csproj:"
+          Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Filter *.csproj -File |
+            ForEach-Object { $_.FullName } | Write-Host
 
-          $project = Join-Path $env:GITHUB_WORKSPACE ($env:PROJECT_PATH -replace "/", "\")
-          Write-Host "GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
-          Write-Host "Project path:     $project"
-
-          if (!(Test-Path $project)) {
-            Write-Host "ERROR: Project not found."
-            Write-Host ""
-            Write-Host "Available *.csproj files in repo:"
-            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Filter *.csproj -File |
-              ForEach-Object { $_.FullName } |
-              Write-Host
-            throw "Project not found: $project"
-          }
-
-      - name: Start API (dotnet run)
+      - name: Start API
         shell: pwsh
         env:
-          PROJECT_PATH: ${{ inputs.project_path }}
           PORT: ${{ inputs.port }}
+          CSPROJ: ${{ inputs.csproj }}
         run: |
           $ErrorActionPreference = "Stop"
 
-          $port = if ($env:PORT) { $env:PORT } else { "5001" }
-          $project = Join-Path $env:GITHUB_WORKSPACE ($env:PROJECT_PATH -replace "/", "\")
-          $projectDir = Split-Path -Parent $project
+          $port = if ([string]::IsNullOrWhiteSpace($env:PORT)) { "5001" } else { $env:PORT }
+          $csprojRel = $env:CSPROJ -replace "/", "\"
+          $csproj = Join-Path $env:GITHUB_WORKSPACE $csprojRel
 
-          Write-Host "Starting API from: $project"
-          Write-Host "Working directory: $projectDir"
-          Write-Host "Listening on:      http://0.0.0.0:$port"
+          Write-Host "Using csproj: $csproj"
+          if (!(Test-Path $csproj)) { throw "CSProj not found: $csproj" }
 
           dotnet --info
-          dotnet restore "$project"
-          dotnet run --project "$project" --urls "http://0.0.0.0:$port"
+          dotnet restore "$csproj"
+          dotnet run --project "$csproj" --urls "http://0.0.0.0:$port"
