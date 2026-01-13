@@ -1,20 +1,16 @@
-name: Start Project1 Backend
+name: Start Project1 Backend (MyWebApi)
 
 on:
   workflow_dispatch:
     inputs:
       port:
-        description: "Port to bind"
+        description: "Port for the API (dotnet --urls)"
         required: false
         default: "5001"
-      api_relative_path:
-        description: "Path to the WebApi project folder in this repo (relative)"
+      project_path:
+        description: "Path to the .csproj relative to repository root"
         required: false
-        default: "Backend01/MyWebApi" # <-- CHANGE THIS to your repo path, e.g. src/MyWebApi
-      log_dir:
-        description: "Log directory on runner"
-        required: false
-        default: "C:/Apps/logs"
+        default: "App1-S3-EC2-RDS/Backend/MyWebApi/MyWebApi.csproj"
 
 jobs:
   start:
@@ -24,106 +20,43 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Start backend API
+      - name: Verify project exists
         shell: pwsh
         env:
-          API_RELATIVE_PATH: ${{ inputs.api_relative_path }}
-          API_PORT: ${{ inputs.port }}
-          LOG_DIR: ${{ inputs.log_dir }}
+          PROJECT_PATH: ${{ inputs.project_path }}
         run: |
           $ErrorActionPreference = "Stop"
 
-          $apiDir = Join-Path $env:GITHUB_WORKSPACE ($env:API_RELATIVE_PATH -replace "/", "\")
-          $port = if ($env:API_PORT) { $env:API_PORT } else { "5001" }
-          $logDir = if ($env:LOG_DIR) { ($env:LOG_DIR -replace "/", "\") } else { "C:\Apps\logs" }
+          $project = Join-Path $env:GITHUB_WORKSPACE ($env:PROJECT_PATH -replace "/", "\")
+          Write-Host "GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
+          Write-Host "Project path:     $project"
 
-          $pidFile = Join-Path $logDir "api.pid"
-          $currentLogs = Join-Path $logDir "api-current-logs.txt"
-
-          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-
-          if (Test-Path $pidFile) {
-            try {
-              $oldPid = (Get-Content $pidFile -ErrorAction Stop)
-              if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
-                Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
-                Start-Sleep -Seconds 2
-              }
-            } catch {}
+          if (!(Test-Path $project)) {
+            Write-Host "ERROR: Project not found."
+            Write-Host ""
+            Write-Host "Available *.csproj files in repo:"
+            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Filter *.csproj -File |
+              ForEach-Object { $_.FullName } |
+              Write-Host
+            throw "Project not found: $project"
           }
 
-          if (!(Test-Path $apiDir)) {
-            Write-Host "API_DIR not found: $apiDir"
-            Write-Host "Workspace: $env:GITHUB_WORKSPACE"
-            Write-Host "Workspace listing:"
-            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Force | Format-Table -AutoSize | Out-String | Write-Host
-            throw "API_DIR not found. Fix workflow input 'api_relative_path' to match repo structure."
-          }
+      - name: Start API (dotnet run)
+        shell: pwsh
+        env:
+          PROJECT_PATH: ${{ inputs.project_path }}
+          PORT: ${{ inputs.port }}
+        run: |
+          $ErrorActionPreference = "Stop"
 
-          $csproj = Get-ChildItem -Path $apiDir -Filter *.csproj -File -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $csproj) {
-            Write-Host "No .csproj found in: $apiDir"
-            Get-ChildItem -Path $apiDir -Force | Format-Table -AutoSize | Out-String | Write-Host
-            throw "Could not find a .csproj in the specified api_relative_path."
-          }
+          $port = if ($env:PORT) { $env:PORT } else { "5001" }
+          $project = Join-Path $env:GITHUB_WORKSPACE ($env:PROJECT_PATH -replace "/", "\")
+          $projectDir = Split-Path -Parent $project
 
-          $dotnet = (Get-Command dotnet -ErrorAction Stop).Source
+          Write-Host "Starting API from: $project"
+          Write-Host "Working directory: $projectDir"
+          Write-Host "Listening on:      http://0.0.0.0:$port"
 
-          $ts = Get-Date -Format "yyyyMMdd-HHmmss"
-          $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
-          $errLog = Join-Path $logDir ("api-err-" + $ts + ".txt")
-
-          "OUT_LOG=$outLog" | Out-File -FilePath $currentLogs -Force
-          "ERR_LOG=$errLog" | Out-File -FilePath $currentLogs -Append
-
-          "----- START $ts -----" | Out-File -FilePath $outLog -Append
-          "dotnet=$dotnet" | Out-File -FilePath $outLog -Append
-          "API_DIR=$apiDir" | Out-File -FilePath $outLog -Append
-          "PROJECT=$($csproj.FullName)" | Out-File -FilePath $outLog -Append
-          "PORT=$port" | Out-File -FilePath $outLog -Append
-
-          # Start dotnet (note: on GitHub-hosted runners, the process will not persist after job ends)
-          $psi = New-Object System.Diagnostics.ProcessStartInfo
-          $psi.FileName = $dotnet
-          $psi.Arguments = "run --project `"$($csproj.FullName)`" --urls http://0.0.0.0:$port"
-          $psi.WorkingDirectory = $apiDir
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError  = $true
-          $psi.CreateNoWindow = $true
-
-          $p = New-Object System.Diagnostics.Process
-          $p.StartInfo = $psi
-          $null = $p.Start()
-
-          $p.Id | Out-File -FilePath $pidFile -Force
-          "Started pid=$($p.Id)" | Out-File -FilePath $outLog -Append
-
-          $p.BeginOutputReadLine()
-          $p.BeginErrorReadLine()
-
-          Register-ObjectEvent -InputObject $p -EventName OutputDataReceived -Action {
-            if ($EventArgs.Data) { $EventArgs.Data | Out-File -FilePath $using:outLog -Append }
-          } | Out-Null
-
-          Register-ObjectEvent -InputObject $p -EventName ErrorDataReceived -Action {
-            if ($EventArgs.Data) { $EventArgs.Data | Out-File -FilePath $using:errLog -Append }
-          } | Out-Null
-
-          Start-Sleep -Seconds 3
-          if ($p.HasExited) {
-            "Process exited immediately; dumping err tail" | Out-File -FilePath $outLog -Append
-            if (Test-Path $errLog) { Get-Content $errLog -Tail 150 | Out-File -FilePath $outLog -Append }
-            throw "Backend process did not stay running"
-          }
-
-          try {
-            "Listening check:" | Out-File -FilePath $outLog -Append
-            (netstat -ano | Select-String (":" + $port + " ")) |
-              ForEach-Object { $_.ToString() } |
-              Out-File -FilePath $outLog -Append
-          } catch {}
-
-          Write-Host "Started. Logs:"
-          Write-Host "  $outLog"
-          Write-Host "  $errLog"
+          dotnet --info
+          dotnet restore "$project"
+          dotnet run --project "$project" --urls "http://0.0.0.0:$port"
