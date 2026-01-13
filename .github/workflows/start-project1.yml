@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       aws_region:
-        description: "AWS Region (e.g., us-east-1)"
+        description: "AWS Region"
         required: true
         default: "us-east-1"
       instance_id:
-        description: "EC2 Instance ID"
+        description: "EC2 instance id"
         required: true
         default: "i-0aa128f11e1299832"
       port:
@@ -31,40 +31,56 @@ jobs:
           aws-region: ${{ inputs.aws_region }}
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
 
-      - name: Start EC2 and wait until running
+      - name: Start EC2 and wait (EC2 running + SSM online)
         shell: bash
         run: |
           set -euo pipefail
-          aws ec2 start-instances --instance-ids "${{ inputs.instance_id }}" --output table
-          aws ec2 wait instance-running --instance-ids "${{ inputs.instance_id }}"
+          INSTANCE_ID="${{ inputs.instance_id }}"
 
-      - name: Start Backend (SSM) and verify port is listening
+          aws ec2 start-instances --instance-ids "$INSTANCE_ID" --output table
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+
+          echo "Waiting for SSM agent to be Online for $INSTANCE_ID ..."
+          # Wait up to ~10 minutes for SSM ping to come online
+          for i in $(seq 1 60); do
+            STATUS="$(aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+              --query "InstanceInformationList[0].PingStatus" \
+              --output text 2>/dev/null || true)"
+
+            echo "SSM PingStatus: ${STATUS:-<none>}"
+            if [ "$STATUS" = "Online" ]; then
+              echo "SSM is Online."
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "SSM did not come Online in time. Check: SSM Agent installed/running, IAM instance profile, and networking."
+          exit 1
+
+      - name: Start Backend via SSM (detached) and verify listener
         shell: bash
         run: |
           set -euo pipefail
-
           INSTANCE_ID="${{ inputs.instance_id }}"
           PORT="${{ inputs.port }}"
 
-          # Build the PowerShell that will run ON the EC2 instance.
-          # It starts dotnet run detached, writes logs, and verifies the listener.
           cat > _payload.ps1 <<'PS1'
           $ErrorActionPreference = "Stop"
-
           $port = "__PORT__"
 
-          # Adjust ONLY if your real path differs:
-          $apiDir = "C:\Apps\App1-S3-EC2-RDS\Backend\MyWebApi"
-
+          # This matches your screenshot Content root: C:\Backend01\MyWebApi
+          $apiDir = "C:\Backend01\MyWebApi"
           if (!(Test-Path $apiDir)) { throw "API_DIR not found: $apiDir" }
 
+          # If your csproj has a different name, change it here:
           $csproj = Join-Path $apiDir "MyWebApi.csproj"
           if (!(Test-Path $csproj)) { throw "CSPROJ not found: $csproj" }
 
           $logDir = "C:\Apps\logs"
           New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-          # Stop old process if we previously started it
           $pidFile = Join-Path $logDir "api.pid"
           if (Test-Path $pidFile) {
             try {
@@ -78,7 +94,6 @@ jobs:
           $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
           $errLog = Join-Path $logDir ("api-err-" + $ts + ".txt")
 
-          # Find dotnet reliably under SSM context
           $dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
           if (!$dotnet) {
             $fallback = "C:\Program Files\dotnet\dotnet.exe"
@@ -102,15 +117,10 @@ jobs:
           $p.Id | Out-File -FilePath $pidFile -Force
 
           Start-Sleep -Seconds 4
-
-          # Verify the process is alive
           try { $null = Get-Process -Id $p.Id -ErrorAction Stop } catch { throw "Backend exited immediately. Check $errLog and $outLog" }
 
-          # Verify port is listening
           $listen = netstat -ano | Select-String -Pattern (":$port\s+LISTENING")
-          if (!$listen) {
-            throw "Process started (PID=$($p.Id)) but port $port is not LISTENING. Check logs: $errLog / $outLog"
-          }
+          if (!$listen) { throw "Process started (PID=$($p.Id)) but port $port is not LISTENING. Check $errLog and $outLog" }
 
           "OK: Started backend. PID=$($p.Id). Listening on $port." | Out-File -FilePath $outLog -Append
           PS1
@@ -122,7 +132,7 @@ jobs:
             aws ssm send-command \
               --instance-ids "$INSTANCE_ID" \
               --document-name "AWS-RunPowerShellScript" \
-              --comment "Start Project1 backend (dotnet run) and verify port" \
+              --comment "Start backend and verify port" \
               --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
               --query "Command.CommandId" \
               --output text
@@ -138,13 +148,6 @@ jobs:
             --query "{Status:Status,StatusDetails:StatusDetails,ResponseCode:ResponseCode}" \
             --output table
 
-          echo "---- SSM STDOUT ----"
-          aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID" \
-            --query "StandardOutputContent" \
-            --output text || true
-
           echo "---- SSM STDERR ----"
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
@@ -152,10 +155,9 @@ jobs:
             --query "StandardErrorContent" \
             --output text || true
 
-      - name: Print EC2 public IP (for your frontend config)
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws ec2 describe-instances --instance-ids "${{ inputs.instance_id }}" \
-            --query "Reservations[0].Instances[0].PublicIpAddress" \
-            --output text
+          echo "---- SSM STDOUT ----"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardOutputContent" \
+            --output text || true
