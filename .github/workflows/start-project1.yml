@@ -1,90 +1,87 @@
-name: Start Project1 Backend
+name: Start Project1 (EC2 + API)
 
 on:
   workflow_dispatch:
     inputs:
-      api_relative_path:
-        description: "Folder containing the Web API .csproj (relative to repo root)"
-        required: false
-        default: "App1-S3-EC2-RDS/Backend/MyWebApi"
-      port:
-        description: "Port to bind"
-        required: false
-        default: "5001"
-      log_dir:
-        description: "Log directory on runner"
-        required: false
-        default: "C:/Apps/logs"
+      aws_region:
+        description: "AWS region"
+        required: true
+        default: "us-east-1"
+      instance_id:
+        description: "EC2 instance id to start (i-xxxxxxxxxxxxxxxxx)"
+        required: true
+        default: "CHANGE_ME"
+      start_api_via_ssm:
+        description: "Also start the API on the instance via SSM"
+        required: true
+        type: choice
+        options: ["false", "true"]
+        default: "true"
+
+permissions:
+  id-token: write   # needed for AWS OIDC
+  contents: read
 
 jobs:
   start:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::CHANGE_ME_ACCOUNT_ID:role/CHANGE_ME_ROLE_NAME
+          aws-region: ${{ inputs.aws_region }}
 
-      - name: Start backend API
-        shell: pwsh
-        env:
-          API_RELATIVE_PATH: ${{ inputs.api_relative_path }}
-          API_PORT: ${{ inputs.port }}
-          LOG_DIR: ${{ inputs.log_dir }}
+      - name: Start EC2 instance
+        shell: bash
         run: |
+          set -euo pipefail
+          aws ec2 start-instances --instance-ids "${{ inputs.instance_id }}"
+
+      - name: Wait until EC2 is running
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ec2 wait instance-running --instance-ids "${{ inputs.instance_id }}"
+          aws ec2 describe-instances --instance-ids "${{ inputs.instance_id }}" \
+            --query "Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress}" \
+            --output table
+
+      - name: Start API on instance via SSM (optional)
+        if: ${{ inputs.start_api_via_ssm == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # PowerShell script executed ON THE EC2 INSTANCE
+          read -r -d '' PS_SCRIPT <<'EOF'
           $ErrorActionPreference = "Stop"
+          $apiDir = "C:\Apps\App1-S3-EC2-RDS\Backend\MyWebApi"
+          if (!(Test-Path $apiDir)) { throw "API_DIR not found on instance: $apiDir" }
 
-          $apiDir = Join-Path $env:GITHUB_WORKSPACE ($env:API_RELATIVE_PATH -replace "/", "\")
-          $port = if ($env:API_PORT) { $env:API_PORT } else { "5001" }
-          $logDir = if ($env:LOG_DIR) { ($env:LOG_DIR -replace "/", "\") } else { "C:\Apps\logs" }
-
-          $pidFile = Join-Path $logDir "api.pid"
-          $currentLogs = Join-Path $logDir "api-current-logs.txt"
-
+          # Stop old (if you have a pid file approach)
+          $logDir = "C:\Apps\logs"
           New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-
+          $pidFile = Join-Path $logDir "api.pid"
           if (Test-Path $pidFile) {
             try {
-              $oldPid = (Get-Content $pidFile -ErrorAction Stop)
-              if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
-                Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
-                Start-Sleep -Seconds 2
-              }
+              $oldPid = Get-Content $pidFile
+              if ($oldPid) { Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue }
+              Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
             } catch {}
           }
 
-          if (!(Test-Path $apiDir)) {
-            Write-Host "API_DIR not found: $apiDir"
-            Write-Host "Workspace: $env:GITHUB_WORKSPACE"
-            Write-Host "Workspace listing:"
-            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Force | Format-Table -AutoSize | Out-String | Write-Host
-            throw "API_DIR not found. Fix workflow input 'api_relative_path' to match repo structure."
-          }
-
-          $csproj = Get-ChildItem -Path $apiDir -Filter *.csproj -File -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $csproj) {
-            Write-Host "No .csproj found in: $apiDir"
-            Get-ChildItem -Path $apiDir -Force | Format-Table -AutoSize | Out-String | Write-Host
-            throw "Could not find a .csproj in the specified api_relative_path."
-          }
-
-          $dotnet = (Get-Command dotnet -ErrorAction Stop).Source
+          $csproj = Join-Path $apiDir "MyWebApi.csproj"
+          if (!(Test-Path $csproj)) { throw "csproj not found on instance: $csproj" }
 
           $ts = Get-Date -Format "yyyyMMdd-HHmmss"
-          $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
-          $errLog = Join-Path $logDir ("api-err-" + $ts + ".txt")
-
-          "OUT_LOG=$outLog" | Out-File -FilePath $currentLogs -Force
-          "ERR_LOG=$errLog" | Out-File -FilePath $currentLogs -Append
-
-          "----- START $ts -----" | Out-File -FilePath $outLog -Append
-          "dotnet=$dotnet" | Out-File -FilePath $outLog -Append
-          "API_DIR=$apiDir" | Out-File -FilePath $outLog -Append
-          "PROJECT=$($csproj.FullName)" | Out-File -FilePath $outLog -Append
-          "PORT=$port" | Out-File -FilePath $outLog -Append
+          $outLog = Join-Path $logDir "api-out-$ts.txt"
+          $errLog = Join-Path $logDir "api-err-$ts.txt"
 
           $psi = New-Object System.Diagnostics.ProcessStartInfo
-          $psi.FileName = $dotnet
-          $psi.Arguments = "run --project `"$($csproj.FullName)`" --urls http://0.0.0.0:$port"
+          $psi.FileName = "dotnet"
+          $psi.Arguments = "run --project `"$csproj`" --urls http://0.0.0.0:5001"
           $psi.WorkingDirectory = $apiDir
           $psi.UseShellExecute = $false
           $psi.RedirectStandardOutput = $true
@@ -94,35 +91,17 @@ jobs:
           $p = New-Object System.Diagnostics.Process
           $p.StartInfo = $psi
           $null = $p.Start()
-
           $p.Id | Out-File -FilePath $pidFile -Force
-          "Started pid=$($p.Id)" | Out-File -FilePath $outLog -Append
 
-          $p.BeginOutputReadLine()
-          $p.BeginErrorReadLine()
+          "Started pid=$($p.Id)" | Out-File $outLog -Append
+          EOF
 
-          Register-ObjectEvent -InputObject $p -EventName OutputDataReceived -Action {
-            if ($EventArgs.Data) { $EventArgs.Data | Out-File -FilePath $using:outLog -Append }
-          } | Out-Null
-
-          Register-ObjectEvent -InputObject $p -EventName ErrorDataReceived -Action {
-            if ($EventArgs.Data) { $EventArgs.Data | Out-File -FilePath $using:errLog -Append }
-          } | Out-Null
-
-          Start-Sleep -Seconds 3
-          if ($p.HasExited) {
-            "Process exited immediately; dumping err tail" | Out-File -FilePath $outLog -Append
-            if (Test-Path $errLog) { Get-Content $errLog -Tail 150 | Out-File -FilePath $outLog -Append }
-            throw "Backend process did not stay running"
-          }
-
-          try {
-            "Listening check:" | Out-File -FilePath $outLog -Append
-            (netstat -ano | Select-String (":" + $port + " ")) |
-              ForEach-Object { $_.ToString() } |
-              Out-File -FilePath $outLog -Append
-          } catch {}
-
-          Write-Host "Started. Logs:"
-          Write-Host "  $outLog"
-          Write-Host "  $errLog"
+          # Send the command to the instance
+          aws ssm send-command \
+            --instance-ids "${{ inputs.instance_id }}" \
+            --document-name "AWS-RunPowerShellScript" \
+            --comment "Start MyWebApi" \
+            --parameters "{\"commands\":[\"$(
+              printf '%s' "$PS_SCRIPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read())[1:-1])'
+            )\"]}" \
+            --output table
