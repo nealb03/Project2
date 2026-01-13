@@ -9,7 +9,7 @@ filter {
 }
 
 filter {
-  name = "virtualization\-type"
+  name = "virtualization\type"
   values = ["hvm"]
 }
 
