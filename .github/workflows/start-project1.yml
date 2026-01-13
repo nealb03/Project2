@@ -1,4 +1,4 @@
-﻿name: Start Project1 (EC2)
+﻿name: Start Project1 (EC2 + Backend)
 
 on:
   workflow_dispatch:
@@ -34,15 +34,7 @@ jobs:
           aws ec2 start-instances --instance-ids "i-0aa128f11e1299832" --output table
           aws ec2 wait instance-running --instance-ids "i-0aa128f11e1299832"
 
-      - name: Print instance details
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws ec2 describe-instances --instance-ids "i-0aa128f11e1299832" \
-            --query "Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,InstanceType:InstanceType,AZ:Placement.AvailabilityZone}" \
-            --output table
-
-      - name: Start Backend on EC2 via SSM (Windows / PowerShell document, but no PS in workflow)
+      - name: Start Backend on EC2 via SSM (detached Start-Process)
         shell: bash
         run: |
           set -euo pipefail
@@ -50,7 +42,9 @@ jobs:
           INSTANCE_ID="i-0aa128f11e1299832"
           PORT="${{ inputs.port }}"
 
-          cat > start-backend.ps1 <<'PS1'
+          # We send a single PowerShell script body as BASE64 to avoid all quoting issues.
+          # The script starts dotnet run in a detached way so it survives after SSM command completes.
+          cat > _ssm_payload.ps1 <<'PS1'
           $ErrorActionPreference = "Stop"
 
           $apiDir = "C:\Apps\App1-S3-EC2-RDS\Backend\MyWebApi"
@@ -63,6 +57,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
           $pidFile = Join-Path $logDir "api.pid"
+
           if (Test-Path $pidFile) {
             try {
               $oldPid = (Get-Content $pidFile -ErrorAction SilentlyContinue)
@@ -73,39 +68,54 @@ jobs:
 
           $ts = Get-Date -Format "yyyyMMdd-HHmmss"
           $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
+          $errLog = Join-Path $logDir ("api-err-" + $ts + ".txt")
 
           $port = "__PORT__"
 
-          $psi = New-Object System.Diagnostics.ProcessStartInfo
-          $psi.FileName = "dotnet"
-          $psi.Arguments = "run --project `"$csproj`" --urls http://0.0.0.0:$port"
-          $psi.WorkingDirectory = $apiDir
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError  = $true
-          $psi.CreateNoWindow = $true
+          $dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
+          if (!$dotnet) { throw "dotnet not found in PATH for this SSM session user" }
 
-          $p = New-Object System.Diagnostics.Process
-          $p.StartInfo = $psi
-          $null = $p.Start()
+          $argList = @(
+            "run",
+            "--project", "`"$csproj`"",
+            "--urls", "http://0.0.0.0:$port"
+          ) -join " "
+
+          $p = Start-Process -FilePath $dotnet `
+            -ArgumentList $argList `
+            -WorkingDirectory $apiDir `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $outLog `
+            -RedirectStandardError $errLog `
+            -PassThru
 
           $p.Id | Out-File -FilePath $pidFile -Force
-          ("Started pid=" + $p.Id) | Out-File -FilePath $outLog -Append
 
           Start-Sleep -Seconds 2
-          if ($p.HasExited) { exit 1 }
+          try { $null = Get-Process -Id $p.Id -ErrorAction Stop } catch { throw "Backend exited immediately. Check $errLog and $outLog" }
+
+          "Started backend PID=$($p.Id) on port $port" | Out-File -FilePath $outLog -Append
           PS1
 
-          # inject chosen port
-          sed -i "s/__PORT__/${PORT}/g" start-backend.ps1
+          sed -i "s/__PORT__/${PORT}/g" _ssm_payload.ps1
+          B64="$(base64 -w 0 _ssm_payload.ps1)"
 
-          # base64 encode to avoid quoting issues with AWS CLI JSON
-          B64="$(base64 -w 0 start-backend.ps1)"
-
-          # send just two simple commands to the instance: write the script + run it
           aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunPowerShellScript" \
-            --comment "Start Project1 backend" \
+            --comment "Start Project1 backend (detached)" \
             --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
+            --output table
+
+      - name: (Optional) Show recent backend logs via SSM
+        shell: bash
+        run: |
+          set -euo pipefail
+          INSTANCE_ID="i-0aa128f11e1299832"
+
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunPowerShellScript" \
+            --comment "Show latest backend logs" \
+            --parameters '{"commands":["powershell -NoProfile -Command \"if (Test-Path C:\\Apps\\logs) { Get-ChildItem C:\\Apps\\logs\\api-err-*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | ForEach-Object { Write-Host \\\"Latest err log:\\\" $_.FullName; Get-Content $_.FullName -Tail 80 } } else { Write-Host \\\"No log dir\\\" }\""]}' \
             --output table
