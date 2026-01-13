@@ -1,4 +1,41 @@
-﻿      - name: Start Backend on EC2 via SSM (wait + capture output)
+﻿name: Start Project1 (EC2 + Backend)
+
+on:
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: "AWS Region (e.g., us-east-1)"
+        required: true
+        default: "us-east-1"
+      port:
+        description: "Backend port"
+        required: true
+        default: "5001"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ inputs.aws_region }}
+          role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
+
+      - name: Start EC2 instance and wait until running
+        shell: bash
+        run: |
+          set -euo pipefail
+          INSTANCE_ID="i-0aa128f11e1299832"
+          aws ec2 start-instances --instance-ids "$INSTANCE_ID" --output table
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+
+      - name: Start Backend via SSM (wait + print stdout/stderr)
         shell: bash
         run: |
           set -euo pipefail
@@ -10,10 +47,10 @@
           $ErrorActionPreference = "Stop"
 
           $apiDir = "C:\Apps\App1-S3-EC2-RDS\Backend\MyWebApi"
-          if (!(Test-Path $apiDir)) { throw "API_DIR not found on instance: $apiDir" }
+          if (!(Test-Path $apiDir)) { throw "API_DIR not found: $apiDir" }
 
           $csproj = Join-Path $apiDir "MyWebApi.csproj"
-          if (!(Test-Path $csproj)) { throw "CSPROJ not found on instance: $csproj" }
+          if (!(Test-Path $csproj)) { throw "CSPROJ not found: $csproj" }
 
           $logDir = "C:\Apps\logs"
           New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -34,7 +71,10 @@
           $port = "__PORT__"
 
           $dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
-          if (!$dotnet) { throw "dotnet not found in PATH for this SSM session user" }
+          if (!$dotnet) {
+            $fallback = "C:\Program Files\dotnet\dotnet.exe"
+            if (Test-Path $fallback) { $dotnet = $fallback } else { throw "dotnet not found (PATH and $fallback missing)" }
+          }
 
           $argList = @(
             "run",
@@ -52,12 +92,10 @@
 
           $p.Id | Out-File -FilePath $pidFile -Force
 
-          Start-Sleep -Seconds 2
+          Start-Sleep -Seconds 3
           try { $null = Get-Process -Id $p.Id -ErrorAction Stop } catch { throw "Backend exited immediately. Check $errLog and $outLog" }
 
           "Started backend PID=$($p.Id) on port $port" | Out-File -FilePath $outLog -Append
-
-          # Show listener status (helps prove it's listening)
           netstat -ano | findstr ":$port" | Out-File -FilePath $outLog -Append
           PS1
 
@@ -68,14 +106,13 @@
             aws ssm send-command \
               --instance-ids "$INSTANCE_ID" \
               --document-name "AWS-RunPowerShellScript" \
-              --comment "Start Project1 backend (detached) + verify" \
+              --comment "Start Project1 backend + verify listener" \
               --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
               --query "Command.CommandId" \
               --output text
           )"
 
           echo "SSM CommandId: $COMMAND_ID"
-
           aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID"
 
           echo "---- SSM invocation status ----"
@@ -98,3 +135,12 @@
             --instance-id "$INSTANCE_ID" \
             --query "StandardErrorContent" \
             --output text || true
+
+      - name: Print instance details
+        shell: bash
+        run: |
+          set -euo pipefail
+          INSTANCE_ID="i-0aa128f11e1299832"
+          aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,InstanceType:InstanceType,AZ:Placement.AvailabilityZone}" \
+            --output table
