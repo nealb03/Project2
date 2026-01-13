@@ -1,40 +1,4 @@
-﻿name: Start Project1 (EC2 + Backend)
-
-on:
-  workflow_dispatch:
-    inputs:
-      aws_region:
-        description: "AWS Region (e.g., us-east-1)"
-        required: true
-        default: "us-east-1"
-      port:
-        description: "Backend port"
-        required: true
-        default: "5001"
-
-permissions:
-  id-token: write
-  contents: read
-
-jobs:
-  start:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Configure AWS credentials via OIDC (QA)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ inputs.aws_region }}
-          role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
-
-      - name: Start EC2 instance
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws ec2 start-instances --instance-ids "i-0aa128f11e1299832" --output table
-          aws ec2 wait instance-running --instance-ids "i-0aa128f11e1299832"
-
-      - name: Start Backend on EC2 via SSM (detached Start-Process)
+﻿      - name: Start Backend on EC2 via SSM (wait + capture output)
         shell: bash
         run: |
           set -euo pipefail
@@ -42,8 +6,6 @@ jobs:
           INSTANCE_ID="i-0aa128f11e1299832"
           PORT="${{ inputs.port }}"
 
-          # We send a single PowerShell script body as BASE64 to avoid all quoting issues.
-          # The script starts dotnet run in a detached way so it survives after SSM command completes.
           cat > _ssm_payload.ps1 <<'PS1'
           $ErrorActionPreference = "Stop"
 
@@ -57,7 +19,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
           $pidFile = Join-Path $logDir "api.pid"
-
           if (Test-Path $pidFile) {
             try {
               $oldPid = (Get-Content $pidFile -ErrorAction SilentlyContinue)
@@ -95,27 +56,45 @@ jobs:
           try { $null = Get-Process -Id $p.Id -ErrorAction Stop } catch { throw "Backend exited immediately. Check $errLog and $outLog" }
 
           "Started backend PID=$($p.Id) on port $port" | Out-File -FilePath $outLog -Append
+
+          # Show listener status (helps prove it's listening)
+          netstat -ano | findstr ":$port" | Out-File -FilePath $outLog -Append
           PS1
 
           sed -i "s/__PORT__/${PORT}/g" _ssm_payload.ps1
           B64="$(base64 -w 0 _ssm_payload.ps1)"
 
-          aws ssm send-command \
-            --instance-ids "$INSTANCE_ID" \
-            --document-name "AWS-RunPowerShellScript" \
-            --comment "Start Project1 backend (detached)" \
-            --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
+          COMMAND_ID="$(
+            aws ssm send-command \
+              --instance-ids "$INSTANCE_ID" \
+              --document-name "AWS-RunPowerShellScript" \
+              --comment "Start Project1 backend (detached) + verify" \
+              --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
+              --query "Command.CommandId" \
+              --output text
+          )"
+
+          echo "SSM CommandId: $COMMAND_ID"
+
+          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID"
+
+          echo "---- SSM invocation status ----"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "{Status:Status,StatusDetails:StatusDetails,ResponseCode:ResponseCode}" \
             --output table
 
-      - name: (Optional) Show recent backend logs via SSM
-        shell: bash
-        run: |
-          set -euo pipefail
-          INSTANCE_ID="i-0aa128f11e1299832"
+          echo "---- SSM STDOUT ----"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardOutputContent" \
+            --output text || true
 
-          aws ssm send-command \
-            --instance-ids "$INSTANCE_ID" \
-            --document-name "AWS-RunPowerShellScript" \
-            --comment "Show latest backend logs" \
-            --parameters '{"commands":["powershell -NoProfile -Command \"if (Test-Path C:\\Apps\\logs) { Get-ChildItem C:\\Apps\\logs\\api-err-*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | ForEach-Object { Write-Host \\\"Latest err log:\\\" $_.FullName; Get-Content $_.FullName -Tail 80 } } else { Write-Host \\\"No log dir\\\" }\""]}' \
-            --output table
+          echo "---- SSM STDERR ----"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardErrorContent" \
+            --output text || true
