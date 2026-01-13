@@ -1,25 +1,19 @@
-name: Start Project1 (EC2 + API)
+name: Start EC2 + Start Backend (MyWebApi)
 
 on:
   workflow_dispatch:
     inputs:
       aws_region:
-        description: "AWS region"
+        description: "AWS region where the instance exists"
         required: true
         default: "us-east-1"
-      instance_id:
-        description: "EC2 instance id to start (i-xxxxxxxxxxxxxxxxx)"
+      port:
+        description: "Backend port"
         required: true
-        default: "CHANGE_ME"
-      start_api_via_ssm:
-        description: "Also start the API on the instance via SSM"
-        required: true
-        type: choice
-        options: ["false", "true"]
-        default: "true"
+        default: "5001"
 
 permissions:
-  id-token: write   # needed for AWS OIDC
+  id-token: write
   contents: read
 
 jobs:
@@ -30,78 +24,56 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::CHANGE_ME_ACCOUNT_ID:role/CHANGE_ME_ROLE_NAME
           aws-region: ${{ inputs.aws_region }}
+          role-to-assume: arn:aws:iam::YOUR_ACCOUNT_ID:role/YOUR_GITHUB_ACTIONS_ROLE
 
       - name: Start EC2 instance
         shell: bash
         run: |
           set -euo pipefail
-          aws ec2 start-instances --instance-ids "${{ inputs.instance_id }}"
+          aws ec2 start-instances --instance-ids "i-0aa128f11e1299832" --output table
+          aws ec2 wait instance-running --instance-ids "i-0aa128f11e1299832"
 
-      - name: Wait until EC2 is running
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws ec2 wait instance-running --instance-ids "${{ inputs.instance_id }}"
-          aws ec2 describe-instances --instance-ids "${{ inputs.instance_id }}" \
-            --query "Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress}" \
-            --output table
-
-      - name: Start API on instance via SSM (optional)
-        if: ${{ inputs.start_api_via_ssm == 'true' }}
+      - name: Start Backend on EC2 via SSM (PowerShell)
         shell: bash
         run: |
           set -euo pipefail
 
-          # PowerShell script executed ON THE EC2 INSTANCE
-          read -r -d '' PS_SCRIPT <<'EOF'
-          $ErrorActionPreference = "Stop"
-          $apiDir = "C:\Apps\App1-S3-EC2-RDS\Backend\MyWebApi"
-          if (!(Test-Path $apiDir)) { throw "API_DIR not found on instance: $apiDir" }
+          INSTANCE_ID="i-0aa128f11e1299832"
+          PORT="${{ inputs.port }}"
 
-          # Stop old (if you have a pid file approach)
-          $logDir = "C:\Apps\logs"
-          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-          $pidFile = Join-Path $logDir "api.pid"
-          if (Test-Path $pidFile) {
-            try {
-              $oldPid = Get-Content $pidFile
-              if ($oldPid) { Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue }
-              Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
-            } catch {}
-          }
-
-          $csproj = Join-Path $apiDir "MyWebApi.csproj"
-          if (!(Test-Path $csproj)) { throw "csproj not found on instance: $csproj" }
-
-          $ts = Get-Date -Format "yyyyMMdd-HHmmss"
-          $outLog = Join-Path $logDir "api-out-$ts.txt"
-          $errLog = Join-Path $logDir "api-err-$ts.txt"
-
-          $psi = New-Object System.Diagnostics.ProcessStartInfo
-          $psi.FileName = "dotnet"
-          $psi.Arguments = "run --project `"$csproj`" --urls http://0.0.0.0:5001"
-          $psi.WorkingDirectory = $apiDir
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError  = $true
-          $psi.CreateNoWindow = $true
-
-          $p = New-Object System.Diagnostics.Process
-          $p.StartInfo = $psi
-          $null = $p.Start()
-          $p.Id | Out-File -FilePath $pidFile -Force
-
-          "Started pid=$($p.Id)" | Out-File $outLog -Append
-          EOF
-
-          # Send the command to the instance
           aws ssm send-command \
-            --instance-ids "${{ inputs.instance_id }}" \
+            --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunPowerShellScript" \
-            --comment "Start MyWebApi" \
-            --parameters "{\"commands\":[\"$(
-              printf '%s' "$PS_SCRIPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read())[1:-1])'
-            )\"]}" \
+            --comment "Start MyWebApi backend on port $PORT" \
+            --parameters commands='[
+              "$ErrorActionPreference = ''Stop''",
+              "$apiDir = ''C:\Apps\App1-S3-EC2-RDS\Backend\MyWebApi''",
+              "if (!(Test-Path $apiDir)) { throw ''API_DIR not found on instance: '' + $apiDir }",
+              "$csproj = Join-Path $apiDir ''MyWebApi.csproj''",
+              "if (!(Test-Path $csproj)) { throw ''CSPROJ not found on instance: '' + $csproj }",
+              "$logDir = ''C:\Apps\logs''",
+              "New-Item -ItemType Directory -Force -Path $logDir | Out-Null",
+              "$pidFile = Join-Path $logDir ''api.pid''",
+              "if (Test-Path $pidFile) { try { $oldPid = Get-Content $pidFile; if ($oldPid) { Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue } Remove-Item $pidFile -Force -ErrorAction SilentlyContinue } catch {} }",
+              "$ts = Get-Date -Format ''yyyyMMdd-HHmmss''",
+              "$outLog = Join-Path $logDir (''api-out-'' + $ts + ''.txt'')",
+              "$errLog = Join-Path $logDir (''api-err-'' + $ts + ''.txt'')",
+              "$psi = New-Object System.Diagnostics.ProcessStartInfo",
+              "$psi.FileName = ''dotnet''",
+              "$psi.Arguments = ''run --project ""'' + $csproj + ''"" --urls http://0.0.0.0:'"$PORT"'''",
+              "$psi.WorkingDirectory = $apiDir",
+              "$psi.UseShellExecute = $false",
+              "$psi.RedirectStandardOutput = $true",
+              "$psi.RedirectStandardError  = $true",
+              "$psi.CreateNoWindow = $true",
+              "$p = New-Object System.Diagnostics.Process",
+              "$p.StartInfo = $psi",
+              "$null = $p.Start()",
+              "$p.Id | Out-File -FilePath $pidFile -Force",
+              "''Started pid='' + $p.Id | Out-File -FilePath $outLog -Append",
+              "Start-Sleep -Seconds 2",
+              "if ($p.HasExited) { ''Process exited early'' | Out-File -FilePath $outLog -Append; exit 1 }",
+              "''Backend started OK on port '' + '"$PORT"' | Out-File -FilePath $outLog -Append"
+            ]' \
             --output table
