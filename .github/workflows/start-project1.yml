@@ -1,11 +1,10 @@
-$wf = @"
-name: Start EC2 + Start Backend (MyWebApi)
+﻿name: Start Project1 (EC2)
 
 on:
   workflow_dispatch:
     inputs:
       aws_region:
-        description: "AWS region where the instance exists"
+        description: "AWS Region (e.g., us-east-1)"
         required: true
         default: "us-east-1"
       port:
@@ -20,11 +19,12 @@ permissions:
 jobs:
   start:
     runs-on: ubuntu-latest
+
     steps:
       - name: Configure AWS credentials via OIDC (QA)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region: `${{ inputs.aws_region }}
+          aws-region: ${{ inputs.aws_region }}
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
 
       - name: Start EC2 instance
@@ -33,12 +33,79 @@ jobs:
           set -euo pipefail
           aws ec2 start-instances --instance-ids "i-0aa128f11e1299832" --output table
           aws ec2 wait instance-running --instance-ids "i-0aa128f11e1299832"
-"@
 
-New-Item -ItemType Directory -Force -Path ".github\workflows" | Out-Null
+      - name: Print instance details
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ec2 describe-instances --instance-ids "i-0aa128f11e1299832" \
+            --query "Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,InstanceType:InstanceType,AZ:Placement.AvailabilityZone}" \
+            --output table
 
-# Write UTF8 *without BOM*
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText((Join-Path (Get-Location) ".github\workflows\start-project1.yml"), $wf, $utf8NoBom)
+      - name: Start Backend on EC2 via SSM (Windows / PowerShell document, but no PS in workflow)
+        shell: bash
+        run: |
+          set -euo pipefail
 
-Write-Host "Rewrote .github/workflows/start-project1.yml as UTF8 (no BOM)."
+          INSTANCE_ID="i-0aa128f11e1299832"
+          PORT="${{ inputs.port }}"
+
+          cat > start-backend.ps1 <<'PS1'
+          $ErrorActionPreference = "Stop"
+
+          $apiDir = "C:\Apps\App1-S3-EC2-RDS\Backend\MyWebApi"
+          if (!(Test-Path $apiDir)) { throw "API_DIR not found on instance: $apiDir" }
+
+          $csproj = Join-Path $apiDir "MyWebApi.csproj"
+          if (!(Test-Path $csproj)) { throw "CSPROJ not found on instance: $csproj" }
+
+          $logDir = "C:\Apps\logs"
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+          $pidFile = Join-Path $logDir "api.pid"
+          if (Test-Path $pidFile) {
+            try {
+              $oldPid = (Get-Content $pidFile -ErrorAction SilentlyContinue)
+              if ($oldPid) { Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue }
+              Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+            } catch {}
+          }
+
+          $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+          $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
+
+          $port = "__PORT__"
+
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = "dotnet"
+          $psi.Arguments = "run --project `"$csproj`" --urls http://0.0.0.0:$port"
+          $psi.WorkingDirectory = $apiDir
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError  = $true
+          $psi.CreateNoWindow = $true
+
+          $p = New-Object System.Diagnostics.Process
+          $p.StartInfo = $psi
+          $null = $p.Start()
+
+          $p.Id | Out-File -FilePath $pidFile -Force
+          ("Started pid=" + $p.Id) | Out-File -FilePath $outLog -Append
+
+          Start-Sleep -Seconds 2
+          if ($p.HasExited) { exit 1 }
+          PS1
+
+          # inject chosen port
+          sed -i "s/__PORT__/${PORT}/g" start-backend.ps1
+
+          # base64 encode to avoid quoting issues with AWS CLI JSON
+          B64="$(base64 -w 0 start-backend.ps1)"
+
+          # send just two simple commands to the instance: write the script + run it
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunPowerShellScript" \
+            --comment "Start Project1 backend" \
+            --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
+            --output table
