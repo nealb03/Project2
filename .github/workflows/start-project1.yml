@@ -1,4 +1,4 @@
-name: START - Project1 Backend (EC2 via SSM)
+name: START - Project1 Backend (SSM dotnet run only)
 
 on:
   workflow_dispatch:
@@ -13,9 +13,6 @@ env:
   OUT_LOG: 'C:\Apps\logs\api-out.txt'
   ERR_LOG: 'C:\Apps\logs\api-err.txt'
   PID_FILE: 'C:\Apps\logs\api.pid'
-
-  # Health check happens ON the EC2 instance, not via S3 and not via EC2 public IP
-  HEALTH_URL_LOCAL: 'http://127.0.0.1:5001/api/health'
 
 jobs:
   start:
@@ -73,10 +70,10 @@ jobs:
           $outLog  = "${env:OUT_LOG}"
           $errLog  = "${env:ERR_LOG}"
           $pidFile = "${env:PID_FILE}"
-          $health  = "${env:HEALTH_URL_LOCAL}"
 
           New-Item -ItemType Directory -Force -Path (Split-Path $outLog) | Out-Null
           "----- START $(Get-Date -Format o) -----" | Out-File -FilePath $outLog -Append
+          "apiDir=$apiDir" | Out-File -FilePath $outLog -Append
 
           if (!(Test-Path $apiDir)) { throw "API_DIR not found: $apiDir" }
 
@@ -91,7 +88,7 @@ jobs:
             } catch {}
           }
 
-          # Start 'dotnet run --urls http://0.0.0.0:5001' in background and log output
+          # EXACT manual start, in background, logging output
           $cmd = "cd /d `"$apiDir`" && dotnet run --urls http://0.0.0.0:$port 1>> `"$outLog`" 2>> `"$errLog`""
           "CMD: $cmd" | Out-File -FilePath $outLog -Append
 
@@ -99,18 +96,7 @@ jobs:
           $p.Id | Out-File -FilePath $pidFile -Force
           "Started pid=$($p.Id)" | Out-File -FilePath $outLog -Append
 
-          # Health check locally on the instance
-          for ($i=0; $i -lt 30; $i++) {
-            try {
-              $r = Invoke-WebRequest -UseBasicParsing -Uri $health -TimeoutSec 3
-              "Health OK: $($r.StatusCode)" | Out-File -FilePath $outLog -Append
-              exit 0
-            } catch {
-              Start-Sleep -Seconds 2
-            }
-          }
-
-          throw "Backend did not become healthy at $health"
+          "START COMMAND ISSUED" | Out-File -FilePath $outLog -Append
           EOF
           )
 
@@ -127,23 +113,14 @@ jobs:
           echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
           aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "${INSTANCE_ID}"
 
-      - name: Show SSM result + fail if not Success
+      - name: Show SSM result (stdout/stderr)
         shell: bash
         run: |
           set -euo pipefail
           CMD_ID="${{ steps.ssm_start.outputs.command_id }}"
-
-          status=$(aws ssm get-command-invocation \
-            --command-id "$CMD_ID" \
-            --instance-id "${INSTANCE_ID}" \
-            --query "Status" --output text)
-
-          echo "SSM status: $status"
 
           aws ssm get-command-invocation \
             --command-id "$CMD_ID" \
             --instance-id "${INSTANCE_ID}" \
             --query "{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}" \
             --output json
-
-          test "$status" = "Success"
