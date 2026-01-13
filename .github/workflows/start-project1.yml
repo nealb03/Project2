@@ -31,23 +31,25 @@ jobs:
           aws-region: ${{ inputs.aws_region }}
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
 
-      - name: Start EC2 and wait (EC2 running + SSM online)
+      - name: Start EC2 and wait until running
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ec2 start-instances --instance-ids "${{ inputs.instance_id }}" --output table
+          aws ec2 wait instance-running --instance-ids "${{ inputs.instance_id }}"
+
+      - name: Wait for SSM agent Online
         shell: bash
         run: |
           set -euo pipefail
           INSTANCE_ID="${{ inputs.instance_id }}"
 
-          aws ec2 start-instances --instance-ids "$INSTANCE_ID" --output table
-          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-
-          echo "Waiting for SSM agent to be Online for $INSTANCE_ID ..."
-          # Wait up to ~10 minutes for SSM ping to come online
-          for i in $(seq 1 60); do
+          echo "Waiting for SSM Online for $INSTANCE_ID ..."
+          for i in $(seq 1 90); do
             STATUS="$(aws ssm describe-instance-information \
               --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
               --query "InstanceInformationList[0].PingStatus" \
               --output text 2>/dev/null || true)"
-
             echo "SSM PingStatus: ${STATUS:-<none>}"
             if [ "$STATUS" = "Online" ]; then
               echo "SSM is Online."
@@ -56,97 +58,94 @@ jobs:
             sleep 10
           done
 
-          echo "SSM did not come Online in time. Check: SSM Agent installed/running, IAM instance profile, and networking."
+          echo "SSM did not become Online. Fix instance IAM profile (AmazonSSMManagedInstanceCore), SSM agent, or networking."
           exit 1
 
-      - name: Start Backend via SSM (detached) and verify listener
+      - name: Start Backend via SSM (non-blocking) + poll invocation output
         shell: bash
         run: |
           set -euo pipefail
           INSTANCE_ID="${{ inputs.instance_id }}"
           PORT="${{ inputs.port }}"
 
-          cat > _payload.ps1 <<'PS1'
-          $ErrorActionPreference = "Stop"
-          $port = "__PORT__"
+          # PowerShell is passed as separate "commands" lines to AWS-RunPowerShellScript.
+          # This avoids long base64 payloads and prevents hangs.
+          read -r -d '' CMD1 <<'PS'
+          $ErrorActionPreference="Stop"
+          $port=__PORT__
+          $apiDir="C:\Backend01\MyWebApi"
+          if(!(Test-Path $apiDir)){ throw "API_DIR not found: $apiDir" }
+          $csproj=Join-Path $apiDir "MyWebApi.csproj"
+          if(!(Test-Path $csproj)){ throw "CSPROJ not found: $csproj" }
+          $logDir="C:\Apps\logs"; New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+          $pidFile=Join-Path $logDir "api.pid"
 
-          # This matches your screenshot Content root: C:\Backend01\MyWebApi
-          $apiDir = "C:\Backend01\MyWebApi"
-          if (!(Test-Path $apiDir)) { throw "API_DIR not found: $apiDir" }
-
-          # If your csproj has a different name, change it here:
-          $csproj = Join-Path $apiDir "MyWebApi.csproj"
-          if (!(Test-Path $csproj)) { throw "CSPROJ not found: $csproj" }
-
-          $logDir = "C:\Apps\logs"
-          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-
-          $pidFile = Join-Path $logDir "api.pid"
-          if (Test-Path $pidFile) {
-            try {
-              $oldPid = (Get-Content $pidFile -ErrorAction SilentlyContinue)
-              if ($oldPid) { Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue }
-              Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
-            } catch {}
+          if(Test-Path $pidFile){
+            try { $oldPid=Get-Content $pidFile -EA SilentlyContinue; if($oldPid){ Stop-Process -Id $oldPid -Force -EA SilentlyContinue } } catch {}
+            try { Remove-Item $pidFile -Force -EA SilentlyContinue } catch {}
           }
 
-          $ts = Get-Date -Format "yyyyMMdd-HHmmss"
-          $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
-          $errLog = Join-Path $logDir ("api-err-" + $ts + ".txt")
+          $ts=Get-Date -Format "yyyyMMdd-HHmmss"
+          $outLog=Join-Path $logDir ("api-out-"+$ts+".txt")
+          $errLog=Join-Path $logDir ("api-err-"+$ts+".txt")
 
-          $dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
-          if (!$dotnet) {
-            $fallback = "C:\Program Files\dotnet\dotnet.exe"
-            if (Test-Path $fallback) { $dotnet = $fallback } else { throw "dotnet not found (PATH and $fallback missing)" }
+          $dotnet=(Get-Command dotnet -EA SilentlyContinue).Source
+          if(!$dotnet){
+            $fallback="C:\Program Files\dotnet\dotnet.exe"
+            if(Test-Path $fallback){ $dotnet=$fallback } else { throw "dotnet not found" }
           }
 
-          $argList = @(
-            "run",
-            "--project", "`"$csproj`"",
-            "--urls", "http://0.0.0.0:$port"
-          ) -join " "
-
-          $p = Start-Process -FilePath $dotnet `
-            -ArgumentList $argList `
-            -WorkingDirectory $apiDir `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $outLog `
-            -RedirectStandardError $errLog `
-            -PassThru
-
+          $argList="run --project `"$csproj`" --urls http://0.0.0.0:$port"
+          $p=Start-Process -FilePath $dotnet -ArgumentList $argList -WorkingDirectory $apiDir -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
           $p.Id | Out-File -FilePath $pidFile -Force
 
-          Start-Sleep -Seconds 4
-          try { $null = Get-Process -Id $p.Id -ErrorAction Stop } catch { throw "Backend exited immediately. Check $errLog and $outLog" }
+          Start-Sleep -Seconds 3
+          netstat -ano | findstr (":" + $port) | Out-String | Out-File -FilePath $outLog -Append
+          "Started PID=$($p.Id) Port=$port Out=$outLog Err=$errLog" | Out-File -FilePath $outLog -Append
+          PS
 
-          $listen = netstat -ano | Select-String -Pattern (":$port\s+LISTENING")
-          if (!$listen) { throw "Process started (PID=$($p.Id)) but port $port is not LISTENING. Check $errLog and $outLog" }
-
-          "OK: Started backend. PID=$($p.Id). Listening on $port." | Out-File -FilePath $outLog -Append
-          PS1
-
-          sed -i "s/__PORT__/${PORT}/g" _payload.ps1
-          B64="$(base64 -w 0 _payload.ps1)"
+          CMD1="${CMD1/__PORT__/$PORT}"
 
           COMMAND_ID="$(
             aws ssm send-command \
               --instance-ids "$INSTANCE_ID" \
               --document-name "AWS-RunPowerShellScript" \
-              --comment "Start backend and verify port" \
-              --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
+              --comment "Start backend detached + write logs" \
+              --parameters "{\"commands\":[$(python3 - <<PY
+import json
+cmds = ["powershell -NoProfile -Command " + json.dumps(CMD1)]
+print(",".join([json.dumps(c) for c in cmds]))
+PY
+)]}" \
               --query "Command.CommandId" \
               --output text
           )"
 
           echo "SSM CommandId: $COMMAND_ID"
-          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID"
+
+          # Poll until terminal state
+          for i in $(seq 1 120); do
+            STATUS="$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query "Status" --output text 2>/dev/null || true)"
+            echo "Invocation status: ${STATUS:-<none>} (attempt $i/120)"
+            if [[ "$STATUS" == "Success" || "$STATUS" == "Failed" || "$STATUS" == "TimedOut" || "$STATUS" == "Cancelled" ]]; then
+              break
+            fi
+            sleep 5
+          done
 
           echo "---- SSM invocation status ----"
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
             --instance-id "$INSTANCE_ID" \
             --query "{Status:Status,StatusDetails:StatusDetails,ResponseCode:ResponseCode}" \
-            --output table
+            --output table || true
+
+          echo "---- SSM STDOUT ----"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardOutputContent" \
+            --output text || true
 
           echo "---- SSM STDERR ----"
           aws ssm get-command-invocation \
@@ -155,9 +154,9 @@ jobs:
             --query "StandardErrorContent" \
             --output text || true
 
-          echo "---- SSM STDOUT ----"
-          aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID" \
-            --query "StandardOutputContent" \
-            --output text || true
+          # Fail job if SSM didn't succeed
+          FINAL_STATUS="$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --query "Status" --output text 2>/dev/null || true)"
+          if [ "$FINAL_STATUS" != "Success" ]; then
+            echo "SSM command did not succeed: $FINAL_STATUS"
+            exit 1
+          fi
