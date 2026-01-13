@@ -1,4 +1,4 @@
-name: START - Project1 Backend (SSM DOTNETRUN - NO CURL)
+name: START - Project1 Backend (SSM dotnet run only)
 
 on:
   workflow_dispatch:
@@ -34,7 +34,6 @@ jobs:
             aws ec2 wait instance-running --instance-ids "${INSTANCE_ID}"
           fi
 
-      # 20 seconds max
       - name: Wait for SSM Online (max 20s)
         shell: bash
         run: |
@@ -46,14 +45,16 @@ jobs:
               --output text 2>/dev/null || true)
             echo "SSM PingStatus: ${ping:-<empty>}"
             if [ "$ping" = "Online" ]; then
+              echo "SSM is Online"
               exit 0
             fi
             sleep 5
           done
-          echo "SSM not Online within 20s."
+          echo "SSM did not become Online within ~20s (increase if Windows boot is slow)."
           exit 1
 
-      - name: Start backend via SSM (dotnet run)
+      - name: Start backend via SSM (dotnet run --urls http://0.0.0.0:5001)
+        id: ssm_start
         shell: bash
         run: |
           set -euo pipefail
@@ -83,6 +84,8 @@ jobs:
           }
 
           $cmd = "cd /d `"$apiDir`" && dotnet run --urls http://0.0.0.0:$port 1>> `"$outLog`" 2>> `"$errLog`""
+          "CMD: $cmd" | Out-File -FilePath $outLog -Append
+
           $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd -WindowStyle Hidden -PassThru
           $p.Id | Out-File -FilePath $pidFile -Force
           "Started pid=$($p.Id)" | Out-File -FilePath $outLog -Append
@@ -92,9 +95,23 @@ jobs:
           PS_B64=$(printf "%s" "$PS_SCRIPT" | base64 -w0)
           RUN="powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"\$b64='$PS_B64'; \$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(\$b64)); iex \$s\""
 
-          aws ssm send-command \
+          CMD_ID=$(aws ssm send-command \
             --instance-ids "${INSTANCE_ID}" \
             --document-name "AWS-RunPowerShellScript" \
-            --comment "Start Project1 backend via dotnet run (no curl)" \
+            --comment "Start backend via SSM dotnet run (no curl)" \
             --parameters "commands=$RUN" \
-            --query "Command.CommandId" --output text
+            --query "Command.CommandId" --output text)
+
+          echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
+          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "${INSTANCE_ID}"
+
+      - name: Show SSM result
+        shell: bash
+        run: |
+          set -euo pipefail
+          CMD_ID="${{ steps.ssm_start.outputs.command_id }}"
+          aws ssm get-command-invocation \
+            --command-id "$CMD_ID" \
+            --instance-id "${INSTANCE_ID}" \
+            --query "{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}" \
+            --output json
