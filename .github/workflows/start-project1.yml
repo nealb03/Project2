@@ -1,16 +1,20 @@
-name: Start Project1 Backend (MyWebApi)
+name: Start Project1 Backend
 
 on:
   workflow_dispatch:
     inputs:
+      api_relative_path:
+        description: "Folder containing the Web API .csproj (relative to repo root)"
+        required: false
+        default: "App1-S3-EC2-RDS/Backend/MyWebApi"
       port:
-        description: "Port for the API"
+        description: "Port to bind"
         required: false
         default: "5001"
-      csproj:
-        description: "CSProj path relative to repo root"
+      log_dir:
+        description: "Log directory on runner"
         required: false
-        default: "App1-S3-EC2-RDS/Backend/MyWebApi/MyWebApi.csproj"
+        default: "C:/Apps/logs"
 
 jobs:
   start:
@@ -20,32 +24,105 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Print workspace + find csproj (debug)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          Write-Host "GITHUB_WORKSPACE = $env:GITHUB_WORKSPACE"
-          Write-Host "Top-level:"
-          Get-ChildItem -Path $env:GITHUB_WORKSPACE -Force | Format-Table -AutoSize | Out-String | Write-Host
-          Write-Host "All *.csproj:"
-          Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Filter *.csproj -File |
-            ForEach-Object { $_.FullName } | Write-Host
-
-      - name: Start API
+      - name: Start backend API
         shell: pwsh
         env:
-          PORT: ${{ inputs.port }}
-          CSPROJ: ${{ inputs.csproj }}
+          API_RELATIVE_PATH: ${{ inputs.api_relative_path }}
+          API_PORT: ${{ inputs.port }}
+          LOG_DIR: ${{ inputs.log_dir }}
         run: |
           $ErrorActionPreference = "Stop"
 
-          $port = if ([string]::IsNullOrWhiteSpace($env:PORT)) { "5001" } else { $env:PORT }
-          $csprojRel = $env:CSPROJ -replace "/", "\"
-          $csproj = Join-Path $env:GITHUB_WORKSPACE $csprojRel
+          $apiDir = Join-Path $env:GITHUB_WORKSPACE ($env:API_RELATIVE_PATH -replace "/", "\")
+          $port = if ($env:API_PORT) { $env:API_PORT } else { "5001" }
+          $logDir = if ($env:LOG_DIR) { ($env:LOG_DIR -replace "/", "\") } else { "C:\Apps\logs" }
 
-          Write-Host "Using csproj: $csproj"
-          if (!(Test-Path $csproj)) { throw "CSProj not found: $csproj" }
+          $pidFile = Join-Path $logDir "api.pid"
+          $currentLogs = Join-Path $logDir "api-current-logs.txt"
 
-          dotnet --info
-          dotnet restore "$csproj"
-          dotnet run --project "$csproj" --urls "http://0.0.0.0:$port"
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+          if (Test-Path $pidFile) {
+            try {
+              $oldPid = (Get-Content $pidFile -ErrorAction Stop)
+              if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
+                Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
+              }
+            } catch {}
+          }
+
+          if (!(Test-Path $apiDir)) {
+            Write-Host "API_DIR not found: $apiDir"
+            Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+            Write-Host "Workspace listing:"
+            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Force | Format-Table -AutoSize | Out-String | Write-Host
+            throw "API_DIR not found. Fix workflow input 'api_relative_path' to match repo structure."
+          }
+
+          $csproj = Get-ChildItem -Path $apiDir -Filter *.csproj -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $csproj) {
+            Write-Host "No .csproj found in: $apiDir"
+            Get-ChildItem -Path $apiDir -Force | Format-Table -AutoSize | Out-String | Write-Host
+            throw "Could not find a .csproj in the specified api_relative_path."
+          }
+
+          $dotnet = (Get-Command dotnet -ErrorAction Stop).Source
+
+          $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+          $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
+          $errLog = Join-Path $logDir ("api-err-" + $ts + ".txt")
+
+          "OUT_LOG=$outLog" | Out-File -FilePath $currentLogs -Force
+          "ERR_LOG=$errLog" | Out-File -FilePath $currentLogs -Append
+
+          "----- START $ts -----" | Out-File -FilePath $outLog -Append
+          "dotnet=$dotnet" | Out-File -FilePath $outLog -Append
+          "API_DIR=$apiDir" | Out-File -FilePath $outLog -Append
+          "PROJECT=$($csproj.FullName)" | Out-File -FilePath $outLog -Append
+          "PORT=$port" | Out-File -FilePath $outLog -Append
+
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = $dotnet
+          $psi.Arguments = "run --project `"$($csproj.FullName)`" --urls http://0.0.0.0:$port"
+          $psi.WorkingDirectory = $apiDir
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError  = $true
+          $psi.CreateNoWindow = $true
+
+          $p = New-Object System.Diagnostics.Process
+          $p.StartInfo = $psi
+          $null = $p.Start()
+
+          $p.Id | Out-File -FilePath $pidFile -Force
+          "Started pid=$($p.Id)" | Out-File -FilePath $outLog -Append
+
+          $p.BeginOutputReadLine()
+          $p.BeginErrorReadLine()
+
+          Register-ObjectEvent -InputObject $p -EventName OutputDataReceived -Action {
+            if ($EventArgs.Data) { $EventArgs.Data | Out-File -FilePath $using:outLog -Append }
+          } | Out-Null
+
+          Register-ObjectEvent -InputObject $p -EventName ErrorDataReceived -Action {
+            if ($EventArgs.Data) { $EventArgs.Data | Out-File -FilePath $using:errLog -Append }
+          } | Out-Null
+
+          Start-Sleep -Seconds 3
+          if ($p.HasExited) {
+            "Process exited immediately; dumping err tail" | Out-File -FilePath $outLog -Append
+            if (Test-Path $errLog) { Get-Content $errLog -Tail 150 | Out-File -FilePath $outLog -Append }
+            throw "Backend process did not stay running"
+          }
+
+          try {
+            "Listening check:" | Out-File -FilePath $outLog -Append
+            (netstat -ano | Select-String (":" + $port + " ")) |
+              ForEach-Object { $_.ToString() } |
+              Out-File -FilePath $outLog -Append
+          } catch {}
+
+          Write-Host "Started. Logs:"
+          Write-Host "  $outLog"
+          Write-Host "  $errLog"
