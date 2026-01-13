@@ -1,4 +1,4 @@
-name: START - Project1 Backend (EC2 + SSM)
+name: START - Project1 Backend (EC2 + SSM, starts BE)
 
 on:
   workflow_dispatch:
@@ -36,11 +36,11 @@ jobs:
             aws ec2 wait instance-running --instance-ids "${INSTANCE_ID}"
           fi
 
-      - name: Wait for SSM Online (max ~60s)
+      - name: Wait for SSM Online (max ~120s)
         shell: bash
         run: |
           set -euo pipefail
-          for i in {1..12}; do
+          for i in {1..24}; do
             ping=$(aws ssm describe-instance-information \
               --filters Key=InstanceIds,Values="${INSTANCE_ID}" \
               --query "InstanceInformationList[0].PingStatus" \
@@ -51,21 +51,21 @@ jobs:
             fi
             sleep 5
           done
-          echo "SSM did not become Online within the timeout."
+          echo "SSM did not become Online within timeout."
           exit 1
 
-      - name: Start backend via SSM (dotnet run)
+      - name: Start backend via SSM (kill prior PID, validate dotnet, start, verify)
         id: ssm_start
         shell: bash
         run: |
           set -euo pipefail
 
-          # Build parameters JSON safely (jq handles escaping, including backslashes)
-          PARAMS_JSON=$(jq -n --arg apiDir "$API_DIR" \
-                            --arg port "$PORT" \
-                            --arg outLog "$OUT_LOG" \
-                            --arg errLog "$ERR_LOG" \
-                            --arg pidFile "$PID_FILE" \
+          PARAMS_JSON=$(jq -n \
+            --arg apiDir "$API_DIR" \
+            --arg port "$PORT" \
+            --arg outLog "$OUT_LOG" \
+            --arg errLog "$ERR_LOG" \
+            --arg pidFile "$PID_FILE" \
             '{
               commands: [
                 "$ErrorActionPreference = \"Stop\"",
@@ -77,49 +77,81 @@ jobs:
 
                 "New-Item -ItemType Directory -Force -Path (Split-Path $outLog) | Out-Null",
                 "\"----- START $(Get-Date -Format o) -----\" | Out-File -FilePath $outLog -Append",
-                "\"API_DIR=$apiDir PORT=$port\" | Out-File -FilePath $outLog -Append",
 
+                "# Validate API dir",
                 "if (!(Test-Path $apiDir)) { throw \"API_DIR not found: $apiDir\" }",
 
+                "# Validate dotnet exists (PATH can be different in SSM sessions)",
+                "$dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue)",
+                "if (-not $dotnet) {",
+                "  $candidates = @(",
+                "    \"C:\\\\Program Files\\\\dotnet\\\\dotnet.exe\",",
+                "    \"C:\\\\Program Files (x86)\\\\dotnet\\\\dotnet.exe\"",
+                "  )",
+                "  foreach ($c in $candidates) { if (Test-Path $c) { $dotnet = $c; break } }",
+                "  if (-not $dotnet) { throw \"dotnet not found in PATH and not in default install locations\" }",
+                "} else { $dotnet = $dotnet.Source }",
+                "\"dotnet: $dotnet\" | Out-File -FilePath $outLog -Append",
+
+                "# If PID file exists and process is alive, stop it first",
                 "if (Test-Path $pidFile) {",
                 "  try {",
-                "    $pid = (Get-Content $pidFile -ErrorAction Stop)",
-                "    if ($pid -and (Get-Process -Id $pid -ErrorAction SilentlyContinue)) {",
-                "      \"Already running pid=$pid\" | Out-File -FilePath $outLog -Append",
-                "      exit 0",
+                "    $oldPid = (Get-Content $pidFile -ErrorAction Stop)",
+                "    if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {",
+                "      \"Stopping existing pid=$oldPid\" | Out-File -FilePath $outLog -Append",
+                "      Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue",
+                "      Start-Sleep -Seconds 2",
                 "    }",
                 "  } catch {}",
                 "}",
 
-                "$cmd = \"cd /d `\"$apiDir`\" && dotnet run --urls http://0.0.0.0:$port 1>> `\"$outLog`\" 2>> `\"$errLog`\"\"",
+                "# Start backend (background) with logs redirected",
+                "$cmd = \"cd /d `\"$apiDir`\" && `\"$dotnet`\" run --urls http://0.0.0.0:$port 1>> `\"$outLog`\" 2>> `\"$errLog`\"\"",
                 "\"CMD: $cmd\" | Out-File -FilePath $outLog -Append",
-
                 "$p = Start-Process -FilePath \"cmd.exe\" -ArgumentList \"/c\", $cmd -WindowStyle Hidden -PassThru",
                 "$p.Id | Out-File -FilePath $pidFile -Force",
-                "\"Started pid=$($p.Id)\" | Out-File -FilePath $outLog -Append"
+                "\"Started pid=$($p.Id)\" | Out-File -FilePath $outLog -Append",
+
+                "# Quick verification: process still exists after a short delay",
+                "Start-Sleep -Seconds 3",
+                "if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) {",
+                "  \"Process exited immediately. Showing last ERR log lines:\" | Out-File -FilePath $outLog -Append",
+                "  if (Test-Path $errLog) { Get-Content $errLog -Tail 80 | Out-File -FilePath $outLog -Append }",
+                "  throw \"Backend process did not stay running\"",
+                "}",
+
+                "# Optional: show listening ports (best effort)",
+                "try {",
+                "  $listening = netstat -ano | Select-String (\":\" + $port + \" \")",
+                "  \"Listening check:\" | Out-File -FilePath $outLog -Append",
+                "  $listening | ForEach-Object { $_.ToString() } | Out-File -FilePath $outLog -Append",
+                "} catch {}"
               ]
             }')
-
-          echo "Built SSM params JSON OK (paths hidden):"
-          echo "$PARAMS_JSON" | sed -E 's/[A-Za-z]:\\[^"]+/<WIN_PATH>/g'
 
           CMD_ID=$(aws ssm send-command \
             --instance-ids "${INSTANCE_ID}" \
             --document-name "AWS-RunPowerShellScript" \
-            --comment "Start Project1 backend via dotnet run (SSM)" \
+            --comment "Start Project1 backend via dotnet run (SSM) + verify" \
             --parameters "$PARAMS_JSON" \
             --query "Command.CommandId" --output text)
 
           echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
-          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "${INSTANCE_ID}"
 
-      - name: Show SSM invocation result
-        shell: bash
-        run: |
-          set -euo pipefail
-          CMD_ID="${{ steps.ssm_start.outputs.command_id }}"
+          # Wait but always print invocation output
+          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "${INSTANCE_ID}" || true
+
           aws ssm get-command-invocation \
             --command-id "$CMD_ID" \
             --instance-id "${INSTANCE_ID}" \
-            --query "{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}" \
             --output json
+
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$CMD_ID" \
+            --instance-id "${INSTANCE_ID}" \
+            --query "Status" --output text)
+
+          echo "SSM Status: $STATUS"
+          if [ "$STATUS" != "Success" ]; then
+            exit 1
+          fi
