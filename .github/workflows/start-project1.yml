@@ -26,7 +26,7 @@ jobs:
 
     steps:
       - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws--credentials@v4
         with:
           aws-region: ${{ inputs.aws_region }}
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
@@ -61,7 +61,7 @@ jobs:
           echo "SSM did not become Online in time. Continuing anyway (will try send-command)."
           exit 0
 
-      - name: Start Backend via SSM (ignore waiter flag errors; do not fail job)
+      - name: Start Backend via SSM (fire-and-forget; ignore errors)
         shell: bash
         run: |
           set -euo pipefail
@@ -115,73 +115,33 @@ jobs:
             -PassThru
 
           $p.Id | Out-File -FilePath $pidFile -Force
-
-          Start-Sleep -Seconds 3
-
-          try { $null = Get-Process -Id $p.Id -ErrorAction Stop } catch { throw "Backend exited immediately. Check $errLog and $outLog" }
-          $listen = netstat -ano | Select-String -Pattern (":$port\s+LISTENING")
-          if (!$listen) { throw "Started PID=$($p.Id) but port $port is not LISTENING. Check $errLog and $outLog" }
-
-          "OK: Started PID=$($p.Id) listening on $port" | Out-File -FilePath $outLog -Append
+          "Started PID=$($p.Id) on port $port" | Out-File -FilePath $outLog -Append
           PS1
 
           sed -i "s/__PORT__/${PORT}/g" start-backend.ps1
           B64="$(base64 -w 0 start-backend.ps1)"
 
-          # Send command (best effort). If it fails, don't fail the workflow.
+          # Fire-and-forget: send the SSM command, do not wait/poll, and never fail the workflow.
           COMMAND_ID="$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunPowerShellScript" \
-            --comment "Start backend detached + verify" \
+            --comment "Start backend detached (fire-and-forget)" \
             --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
             --query "Command.CommandId" \
             --output text 2>/dev/null || true)"
 
-          if [ -z "${COMMAND_ID:-}" ] || [ "${COMMAND_ID:-None}" = "None" ]; then
-            echo "SSM send-command did not return a CommandId (continuing without failing)."
-            exit 0
+          if [ -n "${COMMAND_ID:-}" ] && [ "${COMMAND_ID:-None}" != "None" ]; then
+            echo "SSM CommandId: $COMMAND_ID"
+          else
+            echo "SSM send-command did not return a CommandId (ignored)."
           fi
 
-          echo "SSM CommandId: $COMMAND_ID"
-
-          # IMPORTANT:
-          # Do NOT call `aws ssm wait ... --max-attempts/--delay` because this AWS CLI doesn't support those flags.
-          # Instead: best-effort poll and never fail the job if polling/lookup errors occur.
-
-          echo "Polling SSM invocation (best effort; will not fail workflow)..."
-          for i in $(seq 1 60); do
-            STATUS="$(aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$INSTANCE_ID" \
-              --query "Status" \
-              --output text 2>/dev/null || true)"
-            echo "Invocation status: ${STATUS:-<none>} (attempt $i/60)"
-            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-              break
-            fi
-            sleep 5
-          done
-
-          echo "---- SSM invocation status (best effort) ----"
+          # Optional: one best-effort status fetch (no waiting)
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
             --instance-id "$INSTANCE_ID" \
-            --query "{Status:Status,StatusDetails:StatusDetails,ResponseCode:ResponseCode}" \
+            --query "{Status:Status,ResponseCode:ResponseCode}" \
             --output table 2>/dev/null || true
 
-          echo "---- SSM STDOUT (best effort) ----"
-          aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID" \
-            --query "StandardOutputContent" \
-            --output text 2>/dev/null || true
-
-          echo "---- SSM STDERR (best effort) ----"
-          aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID" \
-            --query "StandardErrorContent" \
-            --output text 2>/dev/null || true
-
-          # Always succeed this step (you said to ignore workflow errors)
+          # Always succeed this step
           exit 0
