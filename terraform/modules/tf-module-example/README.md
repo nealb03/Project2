@@ -2,6 +2,7 @@
 This is an example to setup the infrastructure
 
 ## Usage
+Sample usage:
 ~~
 module "my_ec2_instance" {
   source = "github.com/nealb03/Apps/tree/terraform-workflow"

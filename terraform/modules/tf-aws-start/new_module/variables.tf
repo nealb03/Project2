@@ -12,6 +12,6 @@ variable "number_of_instances" {
 }
 
 variable "ec2_ami_id" {
-    type string
+    type = string
 }
 
