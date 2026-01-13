@@ -38,19 +38,18 @@ jobs:
           aws ec2 start-instances --instance-ids "${{ inputs.instance_id }}" --output table
           aws ec2 wait instance-running --instance-ids "${{ inputs.instance_id }}"
 
-      - name: Wait for SSM agent Online
+      - name: Wait for SSM agent Online (best effort; do not fail job)
         shell: bash
         run: |
           set -euo pipefail
           INSTANCE_ID="${{ inputs.instance_id }}"
 
-          echo "Waiting for SSM Online for $INSTANCE_ID ..."
-          for i in $(seq 1 90); do
+          echo "Waiting for SSM Online for $INSTANCE_ID (best effort)..."
+          for i in $(seq 1 60); do
             STATUS="$(aws ssm describe-instance-information \
               --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
               --query "InstanceInformationList[0].PingStatus" \
               --output text 2>/dev/null || true)"
-
             echo "SSM PingStatus: ${STATUS:-<none>}"
             if [ "$STATUS" = "Online" ]; then
               echo "SSM is Online."
@@ -59,10 +58,10 @@ jobs:
             sleep 10
           done
 
-          echo "SSM did not become Online in time."
-          exit 1
+          echo "SSM did not become Online in time. Continuing anyway (will try send-command)."
+          exit 0
 
-      - name: Start Backend via SSM (detached) + show SSM output
+      - name: Start Backend via SSM (ignore waiter flag errors; do not fail job)
         shell: bash
         run: |
           set -euo pipefail
@@ -73,11 +72,9 @@ jobs:
           $ErrorActionPreference = "Stop"
           $port = "__PORT__"
 
-          # From your screenshot:
           $apiDir = "C:\Backend01\MyWebApi"
           if (!(Test-Path $apiDir)) { throw "API_DIR not found: $apiDir" }
 
-          # If your csproj name differs, change it here:
           $csproj = Join-Path $apiDir "MyWebApi.csproj"
           if (!(Test-Path $csproj)) { throw "CSPROJ not found: $csproj" }
 
@@ -121,9 +118,7 @@ jobs:
 
           Start-Sleep -Seconds 3
 
-          # verify alive + verify listening
           try { $null = Get-Process -Id $p.Id -ErrorAction Stop } catch { throw "Backend exited immediately. Check $errLog and $outLog" }
-
           $listen = netstat -ano | Select-String -Pattern (":$port\s+LISTENING")
           if (!$listen) { throw "Started PID=$($p.Id) but port $port is not LISTENING. Check $errLog and $outLog" }
 
@@ -133,40 +128,60 @@ jobs:
           sed -i "s/__PORT__/${PORT}/g" start-backend.ps1
           B64="$(base64 -w 0 start-backend.ps1)"
 
+          # Send command (best effort). If it fails, don't fail the workflow.
           COMMAND_ID="$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunPowerShellScript" \
             --comment "Start backend detached + verify" \
             --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
             --query "Command.CommandId" \
-            --output text)"
+            --output text 2>/dev/null || true)"
+
+          if [ -z "${COMMAND_ID:-}" ] || [ "${COMMAND_ID:-None}" = "None" ]; then
+            echo "SSM send-command did not return a CommandId (continuing without failing)."
+            exit 0
+          fi
 
           echo "SSM CommandId: $COMMAND_ID"
 
-          # give it longer than default waiter
-          aws ssm wait command-executed \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID" \
-            --max-attempts 120 \
-            --delay 5
+          # IMPORTANT:
+          # Do NOT call `aws ssm wait ... --max-attempts/--delay` because this AWS CLI doesn't support those flags.
+          # Instead: best-effort poll and never fail the job if polling/lookup errors occur.
 
-          echo "---- SSM invocation status ----"
+          echo "Polling SSM invocation (best effort; will not fail workflow)..."
+          for i in $(seq 1 60); do
+            STATUS="$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query "Status" \
+              --output text 2>/dev/null || true)"
+            echo "Invocation status: ${STATUS:-<none>} (attempt $i/60)"
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          echo "---- SSM invocation status (best effort) ----"
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
             --instance-id "$INSTANCE_ID" \
             --query "{Status:Status,StatusDetails:StatusDetails,ResponseCode:ResponseCode}" \
-            --output table
+            --output table 2>/dev/null || true
 
-          echo "---- SSM STDOUT ----"
+          echo "---- SSM STDOUT (best effort) ----"
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
             --instance-id "$INSTANCE_ID" \
             --query "StandardOutputContent" \
-            --output text || true
+            --output text 2>/dev/null || true
 
-          echo "---- SSM STDERR ----"
+          echo "---- SSM STDERR (best effort) ----"
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
             --instance-id "$INSTANCE_ID" \
             --query "StandardErrorContent" \
-            --output text || true
+            --output text 2>/dev/null || true
+
+          # Always succeed this step (you said to ignore workflow errors)
+          exit 0
