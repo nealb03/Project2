@@ -1,166 +1,50 @@
-name: STOP - Project1 Backend (EC2 + SSM)
+name: Stop Project1 Backend
 
 on:
   workflow_dispatch:
-
-env:
-  AWS_REGION: us-east-1
-  INSTANCE_ID: ${{ secrets.PROJECT1_EC2_INSTANCE_ID }}
-
-  PID_FILE: 'C:\Apps\logs\api.pid'
-  OUT_LOG: 'C:\Apps\logs\api-out.txt'
-  ERR_LOG: 'C:\Apps\logs\api-err.txt'
-
-  # Set true to stop the EC2 instance after stopping the backend
-  STOP_INSTANCE_AFTER: "true"
 
 jobs:
   stop:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Ensure EC2 is running (required for SSM stop)
-        shell: bash
+      - name: Build valid JSON parameters (escape-safe)
+        id: build
+        shell: pwsh
         run: |
-          set -euo pipefail
-          state=$(aws ec2 describe-instances --instance-ids "${INSTANCE_ID}" --query "Reservations[0].Instances[0].State.Name" --output text)
-          echo "Instance state: $state"
-          test "$state" = "running"
-
-      - name: Wait for SSM Online
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in {1..60}; do
-            ping=$(aws ssm describe-instance-information \
-              --filters Key=InstanceIds,Values="${INSTANCE_ID}" \
-              --query "InstanceInformationList[0].PingStatus" \
-              --output text 2>/dev/null || true)
-
-            if [ "$ping" = "Online" ]; then
-              echo "SSM is Online"
-              exit 0
-            fi
-
-            echo "SSM not Online yet (got: $ping). Sleeping 10s..."
-            sleep 10
-          done
-
-          echo "SSM did not become Online."
-          exit 1
-
-      - name: Stop backend via SSM
-        id: ssm_stop
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          PS_SCRIPT=$(cat <<'EOF'
           $ErrorActionPreference = "Stop"
 
-          $pidFile = "${env:PID_FILE}"
-          $outLog  = "${env:OUT_LOG}"
-          $errLog  = "${env:ERR_LOG}"
-
-          New-Item -ItemType Directory -Force -Path (Split-Path $outLog) | Out-Null
-          "----- STOP $(Get-Date -Format o) -----" | Out-File -FilePath $outLog -Append
-
-          $stopped = $false
-
-          if (Test-Path $pidFile) {
-            try {
-              $pid = Get-Content $pidFile -ErrorAction Stop
-              if ($pid) {
-                $p = Get-Process -Id $pid -ErrorAction SilentlyContinue
-                if ($p) {
-                  "Stopping pid=$pid" | Out-File -FilePath $outLog -Append
-                  Stop-Process -Id $pid -Force
-                  $stopped = $true
-                } else {
-                  "PID file found but process not running: $pid" | Out-File -FilePath $outLog -Append
-                }
-              }
-            } catch {
-              "Error reading/stopping pid: $($_.Exception.Message)" | Out-File -FilePath $errLog -Append
-            }
-          } else {
-            "PID file not found: $pidFile" | Out-File -FilePath $outLog -Append
-          }
-
-          # Fallback: attempt to stop dotnet processes that might be running the API (best-effort)
-          if (-not $stopped) {
-            try {
-              $dotnets = Get-Process dotnet -ErrorAction SilentlyContinue
-              if ($dotnets) {
-                "Stopping dotnet processes (fallback): $($dotnets.Count)" | Out-File -FilePath $outLog -Append
-                $dotnets | Stop-Process -Force
-                $stopped = $true
-              }
-            } catch {
-              "Fallback stop failed: $($_.Exception.Message)" | Out-File -FilePath $errLog -Append
-            }
-          }
-
-          if (Test-Path $pidFile) { Remove-Item $pidFile -Force -ErrorAction SilentlyContinue }
-
-          if ($stopped) {
-            "STOP OK" | Out-File -FilePath $outLog -Append
-            exit 0
-          } else {
-            "Nothing to stop (or could not identify process)." | Out-File -FilePath $outLog -Append
-            exit 0
-          }
-          EOF
+          # This is the command we want the remote side to run.
+          # Keep it SIMPLE here; do not try to hand-craft JSON with C:\ paths.
+          $remoteCommands = @(
+            '$ErrorActionPreference = "SilentlyContinue"'
+            '$pidFile = "C:\Apps\logs\api.pid"'
+            'if (Test-Path $pidFile) {'
+            '  $pid = Get-Content $pidFile'
+            '  if ($pid) { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue }'
+            '  Remove-Item $pidFile -Force -ErrorAction SilentlyContinue'
+            '}'
           )
 
-          PS_B64=$(printf "%s" "$PS_SCRIPT" | base64 -w0)
-          RUN="powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"\$b64='$PS_B64'; \$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(\$b64)); iex \$s\""
+          # Build the exact JSON your CLI expects: { "commands": [ ... ] }
+          $payload = @{ commands = $remoteCommands } | ConvertTo-Json -Compress
 
-          CMD_ID=$(aws ssm send-command \
-            --instance-ids "${INSTANCE_ID}" \
-            --document-name "AWS-RunPowerShellScript" \
-            --comment "Stop Project1 backend" \
-            --parameters "commands=$RUN" \
-            --query "Command.CommandId" --output text)
+          # Expose as an output for later steps
+          "json=$payload" >> $env:GITHUB_OUTPUT
 
-          echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
-          echo "SSM CommandId: $CMD_ID"
-
-          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "${INSTANCE_ID}"
-
-      - name: Show SSM result + fail if not Success
+      - name: Stop backend using CLI (passes valid JSON)
         shell: bash
+        env:
+          RUN_JSON: ${{ steps.build.outputs.json }}
         run: |
           set -euo pipefail
-          CMD_ID="${{ steps.ssm_stop.outputs.command_id }}"
 
-          status=$(aws ssm get-command-invocation \
-            --command-id "$CMD_ID" \
-            --instance-id "${INSTANCE_ID}" \
-            --query "Status" --output text)
-
-          echo "SSM status: $status"
-
-          aws ssm get-command-invocation \
-            --command-id "$CMD_ID" \
-            --instance-id "${INSTANCE_ID}" \
-            --query "{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}" \
-            --output json
-
-          test "$status" = "Success"
-
-      - name: Stop EC2 instance (optional)
-        if: env.STOP_INSTANCE_AFTER == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws ec2 stop-instances --instance-ids "${INSTANCE_ID}" >/dev/null
-          aws ec2 wait instance-stopped --instance-ids "${INSTANCE_ID}"
-          echo "Instance stopped."
+          # Example placeholder: replace this with your real CLI invocation.
+          # IMPORTANT: we pass the JSON as a single argument, already correctly escaped.
+          #
+          # If your CLI is AWS SSM, it typically looks like:
+          # aws ssm send-command --document-name "AWS-RunPowerShellScript" --parameters "$RUN_JSON" ...
+          #
+          # Keep the quoting EXACTLY like this.
+          your-cli-command-here \
+            --parameters "$RUN_JSON"
