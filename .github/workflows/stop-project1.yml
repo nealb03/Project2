@@ -1,50 +1,87 @@
-name: Stop Project1 Backend
+name: Stop Project1 (EC2 + Backend)
 
 on:
   workflow_dispatch:
+    inputs:
+      aws_region:
+        description: "AWS Region (e.g., us-east-1)"
+        required: true
+        default: "us-east-1"
+      instance_id:
+        description: "EC2 Instance ID"
+        required: true
+        default: "i-0aa128f11e1299832"
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   stop:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Build valid JSON parameters (escape-safe)
-        id: build
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ inputs.aws_region }}
+          role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
 
-          # This is the command we want the remote side to run.
-          # Keep it SIMPLE here; do not try to hand-craft JSON with C:\ paths.
-          $remoteCommands = @(
-            '$ErrorActionPreference = "SilentlyContinue"'
-            '$pidFile = "C:\Apps\logs\api.pid"'
-            'if (Test-Path $pidFile) {'
-            '  $pid = Get-Content $pidFile'
-            '  if ($pid) { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue }'
-            '  Remove-Item $pidFile -Force -ErrorAction SilentlyContinue'
-            '}'
-          )
-
-          # Build the exact JSON your CLI expects: { "commands": [ ... ] }
-          $payload = @{ commands = $remoteCommands } | ConvertTo-Json -Compress
-
-          # Expose as an output for later steps
-          "json=$payload" >> $env:GITHUB_OUTPUT
-
-      - name: Stop backend using CLI (passes valid JSON)
+      - name: Stop Backend via SSM (best effort)
         shell: bash
-        env:
-          RUN_JSON: ${{ steps.build.outputs.json }}
         run: |
           set -euo pipefail
 
-          # Example placeholder: replace this with your real CLI invocation.
-          # IMPORTANT: we pass the JSON as a single argument, already correctly escaped.
-          #
-          # If your CLI is AWS SSM, it typically looks like:
-          # aws ssm send-command --document-name "AWS-RunPowerShellScript" --parameters "$RUN_JSON" ...
-          #
-          # Keep the quoting EXACTLY like this.
-          your-cli-command-here \
-            --parameters "$RUN_JSON"
+          INSTANCE_ID="${{ inputs.instance_id }}"
+
+          cat > _stop_payload.ps1 <<'PS1'
+          $ErrorActionPreference = "Continue"
+
+          $pidFile = "C:\Apps\logs\api.pid"
+          if (Test-Path $pidFile) {
+            $pid = Get-Content $pidFile -ErrorAction SilentlyContinue
+            if ($pid) {
+              try { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } catch {}
+            }
+            try { Remove-Item $pidFile -Force -ErrorAction SilentlyContinue } catch {}
+          }
+
+          # Also kill any dotnet process that is bound to :5001 (in case pid file is missing)
+          try {
+            $line = netstat -ano | findstr ":5001" | findstr "LISTENING"
+            if ($line) {
+              $parts = $line -split "\s+"
+              $maybePid = $parts[-1]
+              if ($maybePid -match "^\d+$") { Stop-Process -Id $maybePid -Force -ErrorAction SilentlyContinue }
+            }
+          } catch {}
+          PS1
+
+          B64="$(base64 -w 0 _stop_payload.ps1)"
+
+          COMMAND_ID="$(
+            aws ssm send-command \
+              --instance-ids "$INSTANCE_ID" \
+              --document-name "AWS-RunPowerShellScript" \
+              --comment "Stop Project1 backend" \
+              --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\stop-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\stop-backend.ps1\"]}" \
+              --query "Command.CommandId" \
+              --output text
+          )"
+
+          echo "SSM CommandId: $COMMAND_ID"
+          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" || true
+
+          echo "---- SSM STDERR (best effort) ----"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardErrorContent" \
+            --output text || true
+
+      - name: Stop EC2 instance and wait until stopped
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ec2 stop-instances --instance-ids "${{ inputs.instance_id }}" --output table
+          aws ec2 wait instance-stopped --instance-ids "${{ inputs.instance_id }}"

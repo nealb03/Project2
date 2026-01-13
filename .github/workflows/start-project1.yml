@@ -7,6 +7,10 @@ on:
         description: "AWS Region (e.g., us-east-1)"
         required: true
         default: "us-east-1"
+      instance_id:
+        description: "EC2 Instance ID"
+        required: true
+        default: "i-0aa128f11e1299832"
       port:
         description: "Backend port"
         required: true
@@ -27,26 +31,31 @@ jobs:
           aws-region: ${{ inputs.aws_region }}
           role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
 
-      - name: Start EC2 instance and wait until running
+      - name: Start EC2 and wait until running
         shell: bash
         run: |
           set -euo pipefail
-          INSTANCE_ID="i-0aa128f11e1299832"
-          aws ec2 start-instances --instance-ids "$INSTANCE_ID" --output table
-          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+          aws ec2 start-instances --instance-ids "${{ inputs.instance_id }}" --output table
+          aws ec2 wait instance-running --instance-ids "${{ inputs.instance_id }}"
 
-      - name: Start Backend via SSM (wait + print stdout/stderr)
+      - name: Start Backend (SSM) and verify port is listening
         shell: bash
         run: |
           set -euo pipefail
 
-          INSTANCE_ID="i-0aa128f11e1299832"
+          INSTANCE_ID="${{ inputs.instance_id }}"
           PORT="${{ inputs.port }}"
 
-          cat > _ssm_payload.ps1 <<'PS1'
+          # Build the PowerShell that will run ON the EC2 instance.
+          # It starts dotnet run detached, writes logs, and verifies the listener.
+          cat > _payload.ps1 <<'PS1'
           $ErrorActionPreference = "Stop"
 
+          $port = "__PORT__"
+
+          # Adjust ONLY if your real path differs:
           $apiDir = "C:\Apps\App1-S3-EC2-RDS\Backend\MyWebApi"
+
           if (!(Test-Path $apiDir)) { throw "API_DIR not found: $apiDir" }
 
           $csproj = Join-Path $apiDir "MyWebApi.csproj"
@@ -55,6 +64,7 @@ jobs:
           $logDir = "C:\Apps\logs"
           New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
+          # Stop old process if we previously started it
           $pidFile = Join-Path $logDir "api.pid"
           if (Test-Path $pidFile) {
             try {
@@ -68,8 +78,7 @@ jobs:
           $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
           $errLog = Join-Path $logDir ("api-err-" + $ts + ".txt")
 
-          $port = "__PORT__"
-
+          # Find dotnet reliably under SSM context
           $dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
           if (!$dotnet) {
             $fallback = "C:\Program Files\dotnet\dotnet.exe"
@@ -92,21 +101,28 @@ jobs:
 
           $p.Id | Out-File -FilePath $pidFile -Force
 
-          Start-Sleep -Seconds 3
+          Start-Sleep -Seconds 4
+
+          # Verify the process is alive
           try { $null = Get-Process -Id $p.Id -ErrorAction Stop } catch { throw "Backend exited immediately. Check $errLog and $outLog" }
 
-          "Started backend PID=$($p.Id) on port $port" | Out-File -FilePath $outLog -Append
-          netstat -ano | findstr ":$port" | Out-File -FilePath $outLog -Append
+          # Verify port is listening
+          $listen = netstat -ano | Select-String -Pattern (":$port\s+LISTENING")
+          if (!$listen) {
+            throw "Process started (PID=$($p.Id)) but port $port is not LISTENING. Check logs: $errLog / $outLog"
+          }
+
+          "OK: Started backend. PID=$($p.Id). Listening on $port." | Out-File -FilePath $outLog -Append
           PS1
 
-          sed -i "s/__PORT__/${PORT}/g" _ssm_payload.ps1
-          B64="$(base64 -w 0 _ssm_payload.ps1)"
+          sed -i "s/__PORT__/${PORT}/g" _payload.ps1
+          B64="$(base64 -w 0 _payload.ps1)"
 
           COMMAND_ID="$(
             aws ssm send-command \
               --instance-ids "$INSTANCE_ID" \
               --document-name "AWS-RunPowerShellScript" \
-              --comment "Start Project1 backend + verify listener" \
+              --comment "Start Project1 backend (dotnet run) and verify port" \
               --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
               --query "Command.CommandId" \
               --output text
@@ -136,11 +152,10 @@ jobs:
             --query "StandardErrorContent" \
             --output text || true
 
-      - name: Print instance details
+      - name: Print EC2 public IP (for your frontend config)
         shell: bash
         run: |
           set -euo pipefail
-          INSTANCE_ID="i-0aa128f11e1299832"
-          aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
-            --query "Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,InstanceType:InstanceType,AZ:Placement.AvailabilityZone}" \
-            --output table
+          aws ec2 describe-instances --instance-ids "${{ inputs.instance_id }}" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text
