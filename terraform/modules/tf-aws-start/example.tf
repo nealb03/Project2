@@ -24,6 +24,7 @@ module "my_ec2_instance" {
   ec2_ami_i  = data.aws_ami.cloud.cobus.id
 }
 
+
 output "instance_id" {
   value = module.my_ec2_instance.ec2_instance_id
 }
