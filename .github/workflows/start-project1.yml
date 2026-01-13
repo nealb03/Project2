@@ -2,20 +2,41 @@ name: Start Project1 Backend
 
 on:
   workflow_dispatch:
+    inputs:
+      port:
+        description: "Port to bind"
+        required: false
+        default: "5001"
+      api_relative_path:
+        description: "Path to the WebApi project folder in this repo (relative)"
+        required: false
+        default: "Backend01/MyWebApi" # <-- CHANGE THIS to your repo path, e.g. src/MyWebApi
+      log_dir:
+        description: "Log directory on runner"
+        required: false
+        default: "C:/Apps/logs"
 
 jobs:
   start:
     runs-on: windows-latest
 
     steps:
-      - name: Start backend API (PowerShell, no JSON parameters)
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start backend API
         shell: pwsh
+        env:
+          API_RELATIVE_PATH: ${{ inputs.api_relative_path }}
+          API_PORT: ${{ inputs.port }}
+          LOG_DIR: ${{ inputs.log_dir }}
         run: |
           $ErrorActionPreference = "Stop"
 
-          $apiDir = "C:\Backend01\MyWebApi"
-          $port = "5001"
-          $logDir = "C:\Apps\logs"
+          $apiDir = Join-Path $env:GITHUB_WORKSPACE ($env:API_RELATIVE_PATH -replace "/", "\")
+          $port = if ($env:API_PORT) { $env:API_PORT } else { "5001" }
+          $logDir = if ($env:LOG_DIR) { ($env:LOG_DIR -replace "/", "\") } else { "C:\Apps\logs" }
+
           $pidFile = Join-Path $logDir "api.pid"
           $currentLogs = Join-Path $logDir "api-current-logs.txt"
 
@@ -31,20 +52,22 @@ jobs:
             } catch {}
           }
 
-          if (!(Test-Path $apiDir)) { throw "API_DIR not found: $apiDir" }
-
-          $dotnetCmd = (Get-Command dotnet -ErrorAction SilentlyContinue)
-          if ($dotnetCmd) {
-            $dotnet = $dotnetCmd.Source
-          } else {
-            $candidates = @(
-              "C:\Program Files\dotnet\dotnet.exe",
-              "C:\Program Files (x86)\dotnet\dotnet.exe"
-            )
-            $dotnet = $null
-            foreach ($c in $candidates) { if (Test-Path $c) { $dotnet = $c; break } }
-            if (-not $dotnet) { throw "dotnet not found (not in PATH and not in default install locations)" }
+          if (!(Test-Path $apiDir)) {
+            Write-Host "API_DIR not found: $apiDir"
+            Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+            Write-Host "Workspace listing:"
+            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Force | Format-Table -AutoSize | Out-String | Write-Host
+            throw "API_DIR not found. Fix workflow input 'api_relative_path' to match repo structure."
           }
+
+          $csproj = Get-ChildItem -Path $apiDir -Filter *.csproj -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $csproj) {
+            Write-Host "No .csproj found in: $apiDir"
+            Get-ChildItem -Path $apiDir -Force | Format-Table -AutoSize | Out-String | Write-Host
+            throw "Could not find a .csproj in the specified api_relative_path."
+          }
+
+          $dotnet = (Get-Command dotnet -ErrorAction Stop).Source
 
           $ts = Get-Date -Format "yyyyMMdd-HHmmss"
           $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
@@ -55,18 +78,40 @@ jobs:
 
           "----- START $ts -----" | Out-File -FilePath $outLog -Append
           "dotnet=$dotnet" | Out-File -FilePath $outLog -Append
-          "API_DIR=$apiDir PORT=$port" | Out-File -FilePath $outLog -Append
+          "API_DIR=$apiDir" | Out-File -FilePath $outLog -Append
+          "PROJECT=$($csproj.FullName)" | Out-File -FilePath $outLog -Append
+          "PORT=$port" | Out-File -FilePath $outLog -Append
 
-          # Start dotnet via cmd.exe to keep it detached from the runner step and redirect logs
-          $cmd = "cd /d `"$apiDir`" && `"$dotnet`" run --urls http://0.0.0.0:$port 1>> `"$outLog`" 2>> `"$errLog`""
-          "CMD: $cmd" | Out-File -FilePath $outLog -Append
+          # Start dotnet (note: on GitHub-hosted runners, the process will not persist after job ends)
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = $dotnet
+          $psi.Arguments = "run --project `"$($csproj.FullName)`" --urls http://0.0.0.0:$port"
+          $psi.WorkingDirectory = $apiDir
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError  = $true
+          $psi.CreateNoWindow = $true
 
-          $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cmd -WindowStyle Hidden -PassThru
+          $p = New-Object System.Diagnostics.Process
+          $p.StartInfo = $psi
+          $null = $p.Start()
+
           $p.Id | Out-File -FilePath $pidFile -Force
           "Started pid=$($p.Id)" | Out-File -FilePath $outLog -Append
 
+          $p.BeginOutputReadLine()
+          $p.BeginErrorReadLine()
+
+          Register-ObjectEvent -InputObject $p -EventName OutputDataReceived -Action {
+            if ($EventArgs.Data) { $EventArgs.Data | Out-File -FilePath $using:outLog -Append }
+          } | Out-Null
+
+          Register-ObjectEvent -InputObject $p -EventName ErrorDataReceived -Action {
+            if ($EventArgs.Data) { $EventArgs.Data | Out-File -FilePath $using:errLog -Append }
+          } | Out-Null
+
           Start-Sleep -Seconds 3
-          if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) {
+          if ($p.HasExited) {
             "Process exited immediately; dumping err tail" | Out-File -FilePath $outLog -Append
             if (Test-Path $errLog) { Get-Content $errLog -Tail 150 | Out-File -FilePath $outLog -Append }
             throw "Backend process did not stay running"
@@ -78,3 +123,7 @@ jobs:
               ForEach-Object { $_.ToString() } |
               Out-File -FilePath $outLog -Append
           } catch {}
+
+          Write-Host "Started. Logs:"
+          Write-Host "  $outLog"
+          Write-Host "  $errLog"
