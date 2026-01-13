@@ -21,11 +21,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Configure AWS credentials (OIDC)
+      - name: Debug context (helps OIDC/trust-policy issues)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "repo: $GITHUB_REPOSITORY"
+          echo "ref:  $GITHUB_REF"
+          echo "sha:  $GITHUB_SHA"
+
+      - name: Configure AWS credentials via OIDC (QA)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ inputs.aws_region }}
-          role-to-assume: arn:aws:iam::YOUR_ACCOUNT_ID:role/YOUR_GITHUB_ACTIONS_ROLE
+          role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
 
       - name: Start EC2 instance
         shell: bash
@@ -33,6 +41,14 @@ jobs:
           set -euo pipefail
           aws ec2 start-instances --instance-ids "i-0aa128f11e1299832" --output table
           aws ec2 wait instance-running --instance-ids "i-0aa128f11e1299832"
+
+      - name: Print instance details
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ec2 describe-instances --instance-ids "i-0aa128f11e1299832" \
+            --query "Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,InstanceType:InstanceType,AZ:Placement.AvailabilityZone}" \
+            --output table
 
       - name: Start Backend on EC2 via SSM (PowerShell)
         shell: bash
