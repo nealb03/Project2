@@ -1,3 +1,48 @@
+$wf = @'
+name: Start EC2 + Start Backend (MyWebApi)
+
+on:
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: "AWS region where the instance exists"
+        required: true
+        default: "us-east-1"
+      port:
+        description: "Backend port"
+        required: true
+        default: "5001"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Debug context
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "repo: $GITHUB_REPOSITORY"
+          echo "ref:  $GITHUB_REF"
+          echo "sha:  $GITHUB_SHA"
+
+      - name: Configure AWS credentials via OIDC (QA)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ inputs.aws_region }}
+          role-to-assume: arn:aws:iam::288761763536:role/GithubActionsRole
+
+      - name: Start EC2 instance
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ec2 start-instances --instance-ids "i-0aa128f11e1299832" --output table
+          aws ec2 wait instance-running --instance-ids "i-0aa128f11e1299832"
+
       - name: Start Backend on EC2 via SSM (PowerShell) - quoting safe
         shell: bash
         run: |
@@ -6,7 +51,6 @@
           INSTANCE_ID="i-0aa128f11e1299832"
           PORT="${{ inputs.port }}"
 
-          # Build the PowerShell script to run ON the EC2 instance
           cat > start-backend.ps1 <<'PS1'
           $ErrorActionPreference = "Stop"
 
@@ -30,7 +74,6 @@
 
           $ts = Get-Date -Format "yyyyMMdd-HHmmss"
           $outLog = Join-Path $logDir ("api-out-" + $ts + ".txt")
-          $errLog = Join-Path $logDir ("api-err-" + $ts + ".txt")
 
           $port = "__PORT__"
 
@@ -51,24 +94,20 @@
           ("Started pid=" + $p.Id) | Out-File -FilePath $outLog -Append
 
           Start-Sleep -Seconds 2
-          if ($p.HasExited) {
-            "Process exited early" | Out-File -FilePath $outLog -Append
-            exit 1
-          }
-
-          ("Backend started OK on port " + $port) | Out-File -FilePath $outLog -Append
+          if ($p.HasExited) { exit 1 }
           PS1
 
-          # Inject port value safely
           sed -i "s/__PORT__/${PORT}/g" start-backend.ps1
-
-          # Base64 encode to avoid JSON quoting problems
           B64=$(base64 -w 0 start-backend.ps1)
 
-          # On the EC2 instance: decode and execute
           aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunPowerShellScript" \
             --comment "Start MyWebApi backend" \
             --parameters "{\"commands\":[\"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$B64')) | Set-Content -Path C:\\\\Windows\\\\Temp\\\\start-backend.ps1 -Encoding UTF8\",\"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\start-backend.ps1\"]}" \
             --output table
+'@
+
+New-Item -ItemType Directory -Force -Path ".github\workflows" | Out-Null
+Set-Content -Path ".github\workflows\start-project1.yml" -Value $wf -Encoding utf8
+Write-Host "Rewrote .github/workflows/start-project1.yml"
